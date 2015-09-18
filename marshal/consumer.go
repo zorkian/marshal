@@ -37,18 +37,29 @@ const (
 
 // consumerClaim is our internal tracking structure about a partition.
 type consumerClaim struct {
-	topic          string
-	partID         int
-	claimed        *int32
-	lastHeartbeat  int64
-	consumer       kafka.Consumer
-	messages       chan *proto.Message
-	cyclesBehind   int
-	offsetCurrent  int64
+	topic         string
+	partID        int
+	claimed       *int32
+	lastHeartbeat int64
+	consumer      kafka.Consumer
+	messages      chan *proto.Message
+
+	// Number of heartbeat cycles this claim has been lagging, i.e., consumption is going
+	// too slowly (defined as being behind by more than 2 heartbeat cycles)
+	cyclesBehind int
+
+	// Offset of the "next" message we expect to consume
+	offsetCurrent int64
+
+	// First offset that is available (an actual offset)
 	offsetEarliest int64
-	offsetLatest   int64
-	startOffset    int64
-	startTime      int64
+
+	// The offset of the next message, i.e., this offset does not exist yet
+	offsetLatest int64
+
+	// Offset and time we started consumption at
+	startOffset int64
+	startTime   int64
 }
 
 // messagePump continuously pulls message from Kafka for this partition and makes them
@@ -248,6 +259,54 @@ func (c *Consumer) claimPartitions() {
 	}
 }
 
+func (c *Consumer) getUnhealthyClaims() []*consumerClaim {
+	nowTime := time.Now().Unix()
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	var unclaimPartitions []*consumerClaim
+	for _, claim := range c.claims {
+		// If current has gone forward of the latest (which is possible, but unlikely)
+		// then we are by definition caught up
+		if claim.offsetCurrent >= claim.offsetLatest {
+			continue
+		}
+
+		// And if we've never consumed from the partition, then never let it be considered
+		// unhealthy (by this flow). A partition that is not being consumed from is not
+		// being heartbeated to, so we will lose the lock through that path.
+		if claim.offsetCurrent == claim.startOffset || nowTime == claim.startTime {
+			continue
+		}
+
+		// Calculate the velocity (how fast the consumer is going) and how many seconds
+		// behind we seem to be
+		velocity := float64(claim.offsetCurrent-claim.startOffset) /
+			float64(nowTime-claim.startTime)
+		secondsBehind := float64(claim.offsetLatest-claim.offsetCurrent) / velocity
+
+		// If it's over two intervals, increase the cycles behind counter (we don't want
+		// to oscillate claims too much, and we need to ensure we have enough data to
+		// decide it's unhealthy).
+		if secondsBehind > HeartbeatInterval*2 {
+			claim.cyclesBehind++
+			log.Warningf("Consumer for %s:%d is %0.2f seconds behind, %d cycle(s).",
+				claim.topic, claim.partID, secondsBehind)
+
+			// If were behind by too many cycles, then we should try to release the
+			// partition.
+			if claim.cyclesBehind >= 3 {
+				unclaimPartitions = append(unclaimPartitions, claim)
+			}
+		} else {
+			claim.cyclesBehind = 0
+		}
+	}
+
+	return unclaimPartitions
+}
+
 // manageClaims is our internal state machine that handles partitions and claiming new
 // ones (or releasing ones).
 func (c *Consumer) manageClaims() {
@@ -259,51 +318,34 @@ func (c *Consumer) manageClaims() {
 			c.lock.RUnlock()
 			return
 		}
+		claimCount := len(c.claims)
 		c.lock.RUnlock()
 
 		// Update offsets of all of our claims so we can check how far along they are
 		if time.Now().After(nextOffsetUpdate) {
 			c.updateOffsets()
 			nextOffsetUpdate = time.Now().Add(60 * time.Second)
-			nowTime := time.Now().Unix()
 
-			// Now determine if any partitions we're consuming are behind and possibly drop them
-			c.lock.Lock()
-			var unclaimPartitions []*consumerClaim
-			for _, claim := range c.claims {
-				// If current has gone forward of the latest (which is possible, but unlikely)
-				// then we are by definition caught up
-				if claim.offsetCurrent >= claim.offsetLatest {
-					continue
-				}
-
-				// Calculate the velocity (how fast the consumer is going) and how many seconds
-				// behind we seem to be
-				velocity := float64(claim.offsetCurrent-claim.startOffset) /
-					float64(nowTime-claim.startTime)
-				secondsBehind := float64(claim.offsetLatest-claim.offsetCurrent) / velocity
-
-				// If it's over two intervals...
-				if secondsBehind > HeartbeatInterval*2 {
-					claim.cyclesBehind++
-					log.Warningf("Consumer for %s:%d is %0.2f seconds behind, %d cycle(s).",
-						claim.topic, claim.partID, secondsBehind)
-					if claim.cyclesBehind >= 3 {
-						log.Errorf("Consumer for %s:%d is too many cycles behind, releasing.",
-							claim.topic, claim.partID)
-						unclaimPartitions = append(unclaimPartitions, claim)
-					}
-				} else {
-					claim.cyclesBehind = 0
-				}
-			}
-			c.lock.Unlock()
+			// Get a list of partitions that seem to be unhealthy (too far behind)
+			unclaimPartitions := c.getUnhealthyClaims()
 
 			// If any partitions to unclaim, do it
 			if len(unclaimPartitions) > 0 {
+				// At most, we're only willing to release up to half of our partitions, because we
+				// don't want to end up giving up everything
+				maxToRelease := claimCount / 2
+				log.Warningf("Found %d lagging partitions out of %d total.",
+					len(unclaimPartitions), claimCount)
+
 				// Kill the message pumps, unclaim them internally, and delete from the list
 				c.lock.Lock()
 				for _, claim := range unclaimPartitions {
+					if maxToRelease <= 0 {
+						log.Warningf("Too many partitions behind.")
+						break
+					}
+					maxToRelease--
+
 					atomic.StoreInt32(claim.claimed, 0)
 					delete(c.claims, claim.partID)
 				}
@@ -312,12 +354,12 @@ func (c *Consumer) manageClaims() {
 				// Now that we're outside of the lock, actually do the slow production of the
 				// release partition messages
 				for _, claim := range unclaimPartitions {
+					log.Warningf("Releasing %s:%d: consumer is behind for too long.",
+						claim.topic, claim.partID)
 					c.marshal.ReleasePartition(claim.topic, claim.partID, claim.offsetCurrent)
 				}
 			}
 		}
-
-		// Handle unclaim events (if we didn't heartbeat or something)
 
 		// At this point, we don't need to engage in any load shedding behavior, so let's
 		// see if there are any partitions out there we can claim
@@ -419,26 +461,30 @@ func (c *Consumer) Consume() []byte {
 		// it has fallen too far behind and released a partition.
 
 		c.lock.Lock()
-		defer c.lock.Unlock()
-
 		claim := c.claims[int(msg.Partition)]
 		if atomic.LoadInt32(claim.claimed) == 1 {
+			// Since we've consumed the message at Offset, our cursor now points to the
+			// next message
+			claim.offsetCurrent = msg.Offset + 1
+
+			// Possibly heartbeat
 			now := time.Now().Unix()
 			if claim.lastHeartbeat <= (now - HeartbeatInterval) {
-				// TODO: Should offset be current message? or next point? what is it elsewhere?
-				// Let's prefer not to have off-by-one errors...
-				claim.offsetCurrent = msg.Offset
 				claim.lastHeartbeat = now
 				// Do this in a goroutine so as not to block the consumption
 				go func() {
 					// Don't use 'claim' here, as this will definitely run outside of the lock
-					// since it's async...
 					log.Debugf("Need to heartbeat for %s:%d.", claim.topic, claim.partID)
 					c.marshal.Heartbeat(msg.Topic, int(msg.Partition), msg.Offset)
 				}()
 			}
+			c.lock.Unlock()
+			return msg.Value
 		}
+		c.lock.Unlock()
 
-		return msg.Value
+		// If we get here, then we retrieved a message for a partition that is not
+		// presently claimed, so let's just pretend we didn't and continue back to the top
+		// for the next message
 	}
 }

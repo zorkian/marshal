@@ -68,6 +68,46 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 	// lots of things can be tested.
 }
 
+func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
+	// Claim partition 0, update our offsets, produce, update offsets again, ensure everything
+	// is consistent (offsets got updated, etc)
+	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	c.Assert(s.cn.tryClaimPartition(1), Equals, true)
+
+	// We just claimed, nothing should be unhealthy
+	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
+
+	// Now put some messages in and update offsets, then we will still be "healthy" since we
+	// haven't consumed
+	s.Produce("test16", 0, "m1", "m2", "m3")
+	c.Assert(s.cn.updateOffsets(), IsNil)
+	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
+
+	// Now consume some messages, and we'll still be healthy
+	c.Assert(s.cn.Consume(), DeepEquals, []byte("m1"))
+	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
+
+	// Update the claim structure so it looks like it's behind, but it's not yet in the danger
+	// of being released
+	s.cn.claims[0].startTime -= HeartbeatInterval * 2
+	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
+	c.Assert(s.cn.claims[0].cyclesBehind, Equals, 1)
+
+	// A second call will increase the cycles behind again, but still not release
+	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
+	c.Assert(s.cn.claims[0].cyclesBehind, Equals, 2)
+
+	// And a third call, this time the partition shows up in our list
+	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 1)
+	c.Assert(s.cn.claims[0].cyclesBehind, Equals, 3)
+
+	// Now let's consume a second message and double our velocity, which will take us under
+	// the threshold and reset our behind count
+	c.Assert(s.cn.Consume(), DeepEquals, []byte("m2"))
+	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
+	c.Assert(s.cn.claims[0].cyclesBehind, Equals, 0)
+}
+
 func (s *ConsumerSuite) TestConsumerHeartbeat(c *C) {
 	// Claim partition 0, update our offsets, produce, update offsets again, ensure everything
 	// is consistent (offsets got updated, etc)
