@@ -75,6 +75,14 @@ func (c *consumerClaim) messagePump() {
 		}
 
 		msg, err := c.consumer.Consume()
+		if err == proto.ErrOffsetOutOfRange {
+			// Fell out of range, presumably because we're handling this too slow, so
+			// let's abandon this consumer
+			log.Errorf("%s:%d error consuming: out of range, abandoning partition",
+				c.topic, c.partID)
+			atomic.StoreInt32(c.claimed, 0)
+			return
+		}
 		if err != nil {
 			log.Errorf("%s:%d error consuming: %s", c.topic, c.partID, err)
 
@@ -273,6 +281,13 @@ func (c *Consumer) getUnhealthyClaims() []*consumerClaim {
 
 	var unclaimPartitions []*consumerClaim
 	for _, claim := range c.claims {
+		// If a partition has unmarked itself then it has determined that it is unhealthy,
+		// so we want to unclaim it
+		if atomic.LoadInt32(claim.claimed) == 0 {
+			unclaimPartitions = append(unclaimPartitions, claim)
+			continue
+		}
+
 		// If current has gone forward of the latest (which is possible, but unlikely)
 		// then we are by definition caught up
 		if claim.offsetCurrent >= claim.offsetLatest {
@@ -340,14 +355,14 @@ func (c *Consumer) manageClaims() {
 				// At most, we're only willing to release up to half of our partitions, because we
 				// don't want to end up giving up everything
 				maxToRelease := claimCount / 2
-				log.Warningf("Found %d lagging partitions out of %d total.",
+				log.Warningf("Found %d unhealthy partitions out of %d total.",
 					len(unclaimPartitions), claimCount)
 
 				// Kill the message pumps, unclaim them internally, and delete from the list
 				c.lock.Lock()
 				for _, claim := range unclaimPartitions {
 					if maxToRelease <= 0 {
-						log.Warningf("Too many partitions behind.")
+						log.Warningf("Too many partitions unhealthy, keeping some.")
 						break
 					}
 					maxToRelease--
@@ -360,7 +375,7 @@ func (c *Consumer) manageClaims() {
 				// Now that we're outside of the lock, actually do the slow production of the
 				// release partition messages
 				for _, claim := range unclaimPartitions {
-					log.Warningf("Releasing %s:%d: consumer is behind for too long.",
+					log.Warningf("Releasing %s:%d: consumer is unhealthy.",
 						claim.topic, claim.partID)
 					c.marshal.ReleasePartition(claim.topic, claim.partID, claim.offsetCurrent)
 				}

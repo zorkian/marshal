@@ -70,6 +70,7 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 	// Now we start a goroutine to start consuming each of the partitions in the marshal
 	// topic. Note that this doesn't handle increasing the partition count on that topic
 	// without stopping all consumers.
+	ws.rationalizers.Add(marshalPartitions)
 	for id := 0; id < marshalPartitions; id++ {
 		go ws.rationalize(id, ws.kafkaConsumerChannel(id))
 	}
@@ -84,6 +85,11 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 			ws.refreshMetadata()
 		}
 	}()
+
+	// Wait for all rationalizers to come alive
+	log.Infof("Waiting for all rationalizers to come alive.")
+	ws.rationalizers.Wait()
+	log.Infof("All rationalizers alive, Marshaler now alive.")
 
 	return ws, nil
 }

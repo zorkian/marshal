@@ -20,6 +20,20 @@ import (
 func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 	out := make(chan message, 1000)
 	go func() {
+		// Get next msg offset so we know when we're "initialized"
+		offsetNext, err := w.kafka.OffsetLatest(MarshalTopic, int32(partID))
+		if err != nil {
+			log.Fatalf("rationalize[%d]: Failed to get offset: %s", err)
+		}
+
+		// TODO: Is there a case where the latest offset is X>0 but there is no data in
+		// the partition? does the offset reset to 0?
+		alive := false
+		if offsetNext == 0 {
+			alive = true
+			w.rationalizers.Done()
+		}
+
 		// TODO: Technically we don't have to start at the beginning, we just need to start back
 		// a couple heartbeat intervals to get a full state of the world. But this is easiest
 		// for right now...
@@ -48,6 +62,11 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 				// The internal consumer will do a number of retries. If we get an error here,
 				// for now let's consider it fatal.
 				log.Fatalf("rationalize[%d]: failed to consume: %s", partID, err)
+			}
+
+			if !alive && msgb.Offset >= offsetNext-1 {
+				alive = true
+				w.rationalizers.Done()
 			}
 
 			msg, err := decode(msgb.Value)

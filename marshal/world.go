@@ -30,6 +30,8 @@ type Marshaler struct {
 	topics map[string]int
 	groups map[string]map[string]*topicState
 
+	rationalizers sync.WaitGroup
+
 	kafka    *kafka.Broker
 	producer kafka.Producer
 
