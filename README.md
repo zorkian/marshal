@@ -1,6 +1,6 @@
 # Marshal - a Kafka consumer coordination library
 
-[![GoDoc](http://img.shields.io/badge/godoc-reference-blue.svg)](http://godoc.org/github.com/zorkian/marshal)
+[![GoDoc](http://img.shields.io/badge/godoc-reference-blue.svg)](http://godoc.org/github.com/zorkian/marshal/marshal)
 [![Build Status](https://travis-ci.org/zorkian/marshal.svg)](https://travis-ci.org/zorkian/marshal)
 
 Caveat lector: This is under construction. It's not really ready for use, and is certainly
