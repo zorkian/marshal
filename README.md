@@ -71,12 +71,9 @@ their clocks, you will not be able to get deterministic behavior. Sorry.
 Marshal also relies on all actors being good actors. Malicious users can cause the system to act
 unpredictably or at their choosing.
 
-## Consumer Coordination
+## Consumer Coordination Protocol
 
-This section discusses the way that Marshal handles coordination internally. Please read and
-understand this, as it is relevant to how you deploy and use this library.
-
-TBD.
+For details about the protocol please see the [PROTOCOL documentation](https://github.com/zorkian/marshal/blob/master/PROTOCOL.md).
 
 ## Bugs
 

@@ -77,8 +77,11 @@ func (c *consumerClaim) messagePump() {
 		msg, err := c.consumer.Consume()
 		if err != nil {
 			log.Errorf("%s:%d error consuming: %s", c.topic, c.partID, err)
-			// TODO: What can we do here? Probably if we got an error it's just
-			// a transient thing, so let's have some backoff here?
+
+			// Often a consumption error is caused by data going away, such as if we're consuming
+			// from the head and Kafka has deleted the data. In that case we need to wait for
+			// the next offset update, so let's not go crazy
+			time.Sleep(1 * time.Second)
 			continue
 		}
 
@@ -162,6 +165,8 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 		log.Errorf("Failed to get offsets for %s:%d: %s", c.topic, partID, err)
 		return false
 	}
+	log.Debugf("Partition %s:%d offsets: early = %d, cur = %d, late = %d",
+		c.topic, partID, oEarly, oCur, oLate)
 
 	// Set up internal claim structure we'll track things in
 	claim := &consumerClaim{
@@ -193,7 +198,8 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 	// Since it's claimed, we now want to heartbeat with the last seen offset
 	err = c.marshal.Heartbeat(c.topic, partID, claim.offsetCurrent)
 	if err != nil {
-		log.Errorf("Consumer failed to heartbeat: %s:%d", c.topic, partID)
+		log.Errorf("Consumer failed to heartbeat %s:%d: %s", c.topic, partID, err)
+		return false
 	}
 	claim.lastHeartbeat = time.Now().Unix()
 
@@ -292,7 +298,7 @@ func (c *Consumer) getUnhealthyClaims() []*consumerClaim {
 		if secondsBehind > HeartbeatInterval*2 {
 			claim.cyclesBehind++
 			log.Warningf("Consumer for %s:%d is %0.2f seconds behind, %d cycle(s).",
-				claim.topic, claim.partID, secondsBehind)
+				claim.topic, claim.partID, secondsBehind, claim.cyclesBehind)
 
 			// If were behind by too many cycles, then we should try to release the
 			// partition.
