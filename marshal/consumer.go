@@ -345,7 +345,7 @@ func (c *Consumer) manageClaims() {
 		// Update offsets of all of our claims so we can check how far along they are
 		if time.Now().After(nextOffsetUpdate) {
 			c.updateOffsets()
-			nextOffsetUpdate = time.Now().Add(60 * time.Second)
+			nextOffsetUpdate = time.Now().Add(HeartbeatInterval * time.Second)
 
 			// Get a list of partitions that seem to be unhealthy (too far behind)
 			unclaimPartitions := c.getUnhealthyClaims()
@@ -482,7 +482,11 @@ func (c *Consumer) Consume() []byte {
 		// it has fallen too far behind and released a partition.
 
 		c.lock.Lock()
-		claim := c.claims[int(msg.Partition)]
+		claim, ok := c.claims[int(msg.Partition)]
+		if !ok {
+			c.lock.Unlock()
+			continue
+		}
 		if atomic.LoadInt32(claim.claimed) == 1 {
 			// Since we've consumed the message at Offset, our cursor now points to the
 			// next message
@@ -495,7 +499,7 @@ func (c *Consumer) Consume() []byte {
 				// Do this in a goroutine so as not to block the consumption
 				go func() {
 					// Don't use 'claim' here, as this will definitely run outside of the lock
-					log.Debugf("Need to heartbeat for %s:%d.", claim.topic, claim.partID)
+					log.Debugf("Need to heartbeat for %s:%d.", msg.Topic, msg.Partition)
 					c.marshal.Heartbeat(msg.Topic, int(msg.Partition), msg.Offset)
 				}()
 			}
