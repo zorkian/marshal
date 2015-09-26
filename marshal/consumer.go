@@ -48,16 +48,36 @@ type consumerClaim struct {
 	// too slowly (defined as being behind by more than 2 heartbeat cycles)
 	cyclesBehind int
 
-	// Offset of the "next" message we expect to consume
-	offsetCurrent int64
-
-	// First offset that is available (an actual offset)
+	// A Kafka partition consists of N messages with offsets. In the basic case, you
+	// can think of an offset like an array index. With log compaction and other trickery
+	// it acts more like a sparse array, but it's a close enough metaphor.
+	//
+	// We keep track of four values for offsets:
+	//
+	//    offsets       1     2     3     7     9    10    11
+	//   partition  [ msg1, msg2, msg3, msg4, msg5, msg6, msg7, ... ]
+	//                 ^                  ^                      ^
+	//                 \- offsetEarliest  |                      |
+	//                                    \- offsetCurrent   offsetLatest
+	//                                     and startOffset
+	//
+	// In this example, offsetEarliest is 1 which is the "oldest" offset within the
+	// partition. At any given time this offset might become invalid (if a log rolls)
+	// so we might update it. startOffset is simply the value of offsetCurrent at
+	// the very beginning of consumption (for tracking velocity).
+	//
+	// offsetCurrent is 7, which is the offset of the NEXT message i.e. this message
+	// has not been consumed yet.
+	//
+	// offsetLatest is 12, which is the offset that Kafka will assign to the message
+	// that next gets committed to the partition. This offset does not yet exist,
+	// and mit might never.
+	offsetCurrent  int64
 	offsetEarliest int64
+	offsetLatest   int64
 
-	// The offset of the next message, i.e., this offset does not exist yet
-	offsetLatest int64
-
-	// Offset and time we started consumption at
+	// These track the offset and time of when consumption started. This is going to
+	// be the values from the first Heartbeat message we generate.
 	startOffset int64
 	startTime   int64
 }
