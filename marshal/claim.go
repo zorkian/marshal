@@ -117,8 +117,7 @@ func newClaim(topic string, partID int, marshal *Marshaler) *claim {
 func (c *claim) updateOffsetsLoop() {
 	ctr := 0
 	for c.Claimed() {
-		jitter := c.rand.Intn(HeartbeatInterval/2) + (HeartbeatInterval / 2)
-		time.Sleep(time.Duration(jitter) * time.Second)
+		time.Sleep(<-c.marshal.jitters)
 		c.updateOffsets(ctr)
 		ctr++
 	}
@@ -325,12 +324,7 @@ func (c *claim) healthCheck() bool {
 // a claimed partition
 func (c *claim) healthCheckLoop() {
 	for c.Claimed() {
-		// We need to health check more often than the heartbeat, but we need to jitter so that
-		// releases don't get synchronized across the fleet. This jitters for 50-100% of the
-		// heartbeat interval.
-		jitter := c.rand.Intn(HeartbeatInterval/2) + (HeartbeatInterval / 2)
-		time.Sleep(time.Duration(jitter) * time.Second)
-
+		time.Sleep(<-c.marshal.jitters)
 		if c.healthCheck() {
 			go c.heartbeat()
 		}
