@@ -182,6 +182,16 @@ func (c *claim) Consumed(offset int64) bool {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	// If our heartbeat has gone at all stale, don't allow consumption from this
+	// partition. In fact, trigger an immediate release without waiting for the
+	// healthcheck loop.
+	if c.lastHeartbeat < time.Now().Unix()-HeartbeatInterval {
+		log.Errorf("%s:%d has gone stale during consumption",
+			c.topic, c.partID)
+		go c.Release()
+		return false
+	}
+
 	c.offsetCurrent = offset + 1
 	return true
 }
@@ -258,6 +268,11 @@ func (c *claim) messagePump() {
 // send a heartbeat to Kafka. If we fail to send a heartbeat, we will release the
 // partition.
 func (c *claim) heartbeat() {
+	// Unclaimed partitions don't heartbeat.
+	if atomic.LoadInt32(c.claimed) != 1 {
+		return
+	}
+
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -273,6 +288,11 @@ func (c *claim) heartbeat() {
 // too many times, this will also start a partition release. Returns true if the
 // partition is healthy, else false.
 func (c *claim) healthCheck() bool {
+	// Unclaimed partitions aren't healthy.
+	if atomic.LoadInt32(c.claimed) != 1 {
+		return false
+	}
+
 	// Get velocities; these functions both use the locks so we have to do this before
 	// we personally take the lock (to avoid deadlock)
 	consumerVelocity := c.ConsumerVelocity()
