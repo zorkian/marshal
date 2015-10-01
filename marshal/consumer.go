@@ -137,8 +137,17 @@ func (c *Consumer) claimPartitions() {
 	for i := 0; i < c.partitions; i++ {
 		partID := (i + offset) % c.partitions
 
-		// Ask the marshaler if it's claimed by anybody
-		if c.marshal.GetPartitionClaim(c.topic, partID).LastHeartbeat > 0 {
+		// Get the most recent claim for this partition
+		lastClaim := c.marshal.GetLastPartitionClaim(c.topic, partID)
+		if lastClaim.isClaimed(time.Now().Unix()) {
+			continue
+		}
+
+		// If the last claim was by this particular consumer, skip it; this is because
+		// we might have become unhealthy and dropped it or we might already be
+		// claiming this partition
+		if lastClaim.GroupID == c.marshal.groupID &&
+			lastClaim.ClientID == c.marshal.clientID {
 			continue
 		}
 

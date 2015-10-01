@@ -314,6 +314,9 @@ func (c *claim) healthCheck() bool {
 			c.topic, c.partID)
 		go c.Release()
 		return false
+	} else {
+		log.Warningf("%s:%d consumer unhealthy: CV %0.2f < PV %0.2f",
+			c.topic, c.partID, consumerVelocity, partitionVelocity)
 	}
 
 	// Clearly we haven't been behind for long enough, so we're still "healthy"
