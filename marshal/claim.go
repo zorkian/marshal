@@ -168,7 +168,21 @@ func (c *claim) setup() {
 
 	// Totally done, let the world know and move on
 	log.Infof("%s:%d Consumer claimed at offset %d (is %d behind)",
-		c.topic, c.partID, c.offsetCurrent, c.offsetLatest)
+		c.topic, c.partID, c.offsetCurrent, c.offsetLatest-c.offsetCurrent)
+}
+
+// Given a message offset (which should be our current offset), return whether or
+// not that offset is allowed to be consumed (i.e., we're still claimed)
+func (c *claim) Consumed(offset int64) bool {
+	if atomic.LoadInt32(c.claimed) != 1 {
+		return false
+	}
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	c.offsetCurrent = offset + 1
+	return true
 }
 
 // Claimed returns whether or not this claim structure is alive and well and believes
@@ -215,7 +229,7 @@ func (c *claim) messagePump() {
 			// let's abandon this consumer
 			log.Errorf("%s:%d error consuming: out of range, abandoning partition",
 				c.topic, c.partID)
-			atomic.StoreInt32(c.claimed, 0)
+			go c.Release()
 			return
 		}
 		if err != nil {
@@ -232,6 +246,21 @@ func (c *claim) messagePump() {
 	}
 }
 
+// heartbeat is the internal "send a heartbeat" function. Calling this will immediately
+// send a heartbeat to Kafka. If we fail to send a heartbeat, we will release the
+// partition.
+func (c *claim) heartbeat() {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsetCurrent)
+	if err != nil {
+		log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
+		go c.Release()
+	}
+	c.lastHeartbeat = time.Now().Unix()
+}
+
 // healthCheck performs a single health check against the claim. If we have failed
 // too many times, this will also start a partition release. Returns true if the
 // partition is healthy, else false.
@@ -246,13 +275,10 @@ func (c *claim) healthCheck() bool {
 
 	// If our heartbeat is expired, we are definitely unhealthy... don't even bother
 	// with checking velocity
-	nowTime := time.Now().Unix()
-	if c.lastHeartbeat < nowTime-HeartbeatInterval {
+	if c.lastHeartbeat < time.Now().Unix()-HeartbeatInterval {
 		log.Warningf("%s:%d consumer unhealthy by heartbeat test, releasing",
 			c.topic, c.partID)
-		go func() {
-			c.Release()
-		}()
+		go c.Release()
 		return false
 	}
 
@@ -279,9 +305,7 @@ func (c *claim) healthCheck() bool {
 	if c.cyclesBehind >= 3 {
 		log.Errorf("%s:%d consumer unhealthy, releasing",
 			c.topic, c.partID)
-		go func() {
-			c.Release()
-		}()
+		go c.Release()
 		return false
 	}
 
@@ -292,20 +316,18 @@ func (c *claim) healthCheck() bool {
 // healthCheckLoop runs regularly and will perform a health check. Exits when we are no longer
 // a claimed partition
 func (c *claim) healthCheckLoop() {
-	for {
+	for c.Claimed() {
 		// We need to health check more often than the heartbeat, but we need to jitter so that
-		// releases don't get synchronized across the fleet.
+		// releases don't get synchronized across the fleet. This jitters for 50-100% of the
+		// heartbeat interval.
 		jitter := c.rand.Intn(HeartbeatInterval/2) + (HeartbeatInterval / 2)
 		time.Sleep(time.Duration(jitter) * time.Second)
 
-		// Exit this loop if unclaimed
-		if !c.Claimed() {
-			log.Debugf("%s:%d health check loop exiting", c.topic, c.partID)
-			return
+		if c.healthCheck() {
+			go c.heartbeat()
 		}
-
-		c.healthCheck()
 	}
+	log.Debugf("%s:%d health check loop exiting", c.topic, c.partID)
 }
 
 // average returns the average of a given slice of int64s. It ignores 0s as

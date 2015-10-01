@@ -145,26 +145,18 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 }
 
 func (s *ConsumerSuite) TestConsumerHeartbeat(c *C) {
-	// Claim partition 0, update our offsets, produce, update offsets again, ensure everything
-	// is consistent (offsets got updated, etc)
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
-	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3"), Equals, int64(2))
 
-	// Consume once, heartbeat unchanged
-	hb := s.cn.claims[0].lastHeartbeat
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m1"))
-	c.Assert(s.cn.claims[0].lastHeartbeat, Equals, hb)
+	// Newly claimed partition should have heartbeated
+	c.Assert(s.cn.claims[0].lastHeartbeat, Not(Equals), 0)
 
-	// Now "force" the heartbeat backwards, should cause consume to heartbeat
+	// Now reset the heartbeat to some other value
 	s.cn.claims[0].lastHeartbeat -= HeartbeatInterval
-	hb = s.cn.claims[0].lastHeartbeat
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m2"))
-	c.Assert(s.cn.claims[0].lastHeartbeat, Not(Equals), hb)
+	hb := s.cn.claims[0].lastHeartbeat
 
-	// Now consume the last, again no heartbeat
-	hb = s.cn.claims[0].lastHeartbeat
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m3"))
-	c.Assert(s.cn.claims[0].lastHeartbeat, Equals, hb)
+	// Manual heartbeat, ensure lastHeartbeat is updated
+	s.cn.claims[0].heartbeat()
+	c.Assert(s.cn.claims[0].lastHeartbeat, Not(Equals), hb)
 }
 
 func (s *ConsumerSuite) TestTryClaimPartition(c *C) {

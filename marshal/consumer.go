@@ -228,18 +228,19 @@ func (c *Consumer) GetCurrentLoad() int {
 func (c *Consumer) Consume() []byte {
 	// TODO: This is almost certainly a slow implementation as we have to scan everything
 	// every time.
-	nextForcedHeartbeat := time.Now().Add(HeartbeatInterval * time.Second)
 	for {
+		var cl *claim
 		var msg *proto.Message
 
 		// TODO: This implementation also can lead to queue starvation since we start at the
-		// front every time.
-		// TODO: Rethink this locking. It really is confusing...
+		// front every time. This might be OK, since we'll still consume as many messages
+		// as we can and the unconsumed ones will get released.
+		// TODO: Rethink this locking.
 		c.lock.RLock()
-		for _, claim := range c.claims {
+		for _, trycl := range c.claims {
 			select {
-			case msg = <-claim.messages:
-				// ...
+			case msg = <-trycl.messages:
+				cl = trycl
 			default:
 				// Do nothing.
 			}
@@ -249,74 +250,17 @@ func (c *Consumer) Consume() []byte {
 		}
 		c.lock.RUnlock()
 
-		// Check for a forced heartbeat cycle where we heartbeat for any idle partitions
-		// that haven't generated a message in a while
-		now := time.Now()
-		if now.After(nextForcedHeartbeat) {
-			nextForcedHeartbeat = now.Add(HeartbeatInterval * time.Second)
-			cutoffTime := now.Unix() - HeartbeatInterval
-			c.lock.Lock()
-			for _, claim := range c.claims {
-				if claim.lastHeartbeat < cutoffTime {
-					claim.lastHeartbeat = now.Unix()
-					go func(claimed *int32, ctopic string, cpartID int, coffset int64) {
-						// Don't use 'claim' here, as this will definitely run outside of the lock
-						log.Infof("Need to heartbeat for %s:%d.", ctopic, cpartID)
-						err := c.marshal.Heartbeat(ctopic, cpartID, coffset)
-						if err != nil {
-							log.Errorf("Failed to heartbeat for %s:%d: %s",
-								ctopic, cpartID, err)
-							atomic.StoreInt32(claimed, 0)
-						}
-					}(claim.claimed, claim.topic, claim.partID, claim.offsetCurrent)
-				} else {
-					log.Debugf("Heartbeat not needed for %s:%d", claim.topic, claim.partID)
-				}
-			}
-			log.Debugf("Claims: %d", len(c.claims))
-			c.lock.Unlock()
-		}
-
 		// TODO: This is braindead.
 		if msg == nil {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
 
-		// Once we're consuming a message we need to update our data structure as well
-		// as possibly make a heartbeat for this partition so the world knows we're
-		// still actively consuming
-		c.lock.Lock()
-		claim, ok := c.claims[int(msg.Partition)]
-		if !ok {
-			c.lock.Unlock()
-			continue
-		}
-		if atomic.LoadInt32(claim.claimed) == 1 {
-			// Since we've consumed the message at Offset, our cursor now points to the
-			// next message
-			claim.offsetCurrent = msg.Offset + 1
-
-			// Possibly heartbeat
-			now := time.Now().Unix()
-			if claim.lastHeartbeat <= (now - HeartbeatInterval) {
-				claim.lastHeartbeat = now
-				// Do this in a goroutine so as not to block the consumption
-				go func(claimed *int32) {
-					// Don't use 'claim' here, as this will definitely run outside of the lock
-					log.Infof("Need to heartbeat for %s:%d.", msg.Topic, msg.Partition)
-					err := c.marshal.Heartbeat(msg.Topic, int(msg.Partition), msg.Offset)
-					if err != nil {
-						log.Errorf("Failed to heartbeat for %s:%d: %s",
-							msg.Topic, msg.Partition, err)
-						atomic.StoreInt32(claimed, 0)
-					}
-				}(claim.claimed)
-			}
-			c.lock.Unlock()
+		// Inform the claimholder that we've consumed this message offset so that it
+		// can update its internal structures.
+		if cl.Consumed(msg.Offset) {
 			return msg.Value
 		}
-		c.lock.Unlock()
 
 		// If we get here, then we retrieved a message for a partition that is not
 		// presently claimed, so let's just pretend we didn't and continue back to the top
