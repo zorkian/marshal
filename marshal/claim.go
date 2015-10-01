@@ -116,12 +116,13 @@ func newClaim(topic string, partID int, marshal *Marshaler) *claim {
 // state.
 func (c *claim) updateOffsetsLoop() {
 	ctr := 0
+	time.Sleep(<-c.marshal.jitters)
 	for c.Claimed() {
-		time.Sleep(<-c.marshal.jitters)
 		c.updateOffsets(ctr)
 		ctr++
+		time.Sleep(<-c.marshal.jitters)
 	}
-	log.Infof("%s:%d no longer claimed, offset loop exiting", c.topic, c.partID)
+	log.Debugf("%s:%d no longer claimed, offset loop exiting", c.topic, c.partID)
 }
 
 // setup is the initial worker that initializes the claim structure. Until this is done,
@@ -326,11 +327,12 @@ func (c *claim) healthCheck() bool {
 // healthCheckLoop runs regularly and will perform a health check. Exits when we are no longer
 // a claimed partition
 func (c *claim) healthCheckLoop() {
+	time.Sleep(<-c.marshal.jitters)
 	for c.Claimed() {
-		time.Sleep(<-c.marshal.jitters)
 		if c.healthCheck() {
 			go c.heartbeat()
 		}
+		time.Sleep(<-c.marshal.jitters)
 	}
 	log.Debugf("%s:%d health check loop exiting", c.topic, c.partID)
 }
