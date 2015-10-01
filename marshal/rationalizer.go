@@ -18,18 +18,24 @@ import (
 // kafkaConsumerChannel creates a consumer that continuously attempts to consume messages from
 // Kafka for the given partition.
 func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
+	log.Debugf("rationalize[%d]: starting", partID)
 	out := make(chan message, 1000)
 	go func() {
-		// Get next msg offset so we know when we're "initialized"
+		// Figure out how many messages are in this topic
+		offsetFirst, err := w.kafka.OffsetEarliest(MarshalTopic, int32(partID))
+		if err != nil {
+			log.Fatalf("rationalize[%d]: Failed to get offset: %s", err)
+		}
 		offsetNext, err := w.kafka.OffsetLatest(MarshalTopic, int32(partID))
 		if err != nil {
 			log.Fatalf("rationalize[%d]: Failed to get offset: %s", err)
 		}
+		log.Debugf("rationalize[%d]: offsets %d to %d", partID, offsetFirst, offsetNext)
 
 		// TODO: Is there a case where the latest offset is X>0 but there is no data in
 		// the partition? does the offset reset to 0?
 		alive := false
-		if offsetNext == 0 {
+		if offsetNext == 0 || offsetFirst == offsetNext {
 			alive = true
 			w.rationalizers.Done()
 		}
@@ -169,7 +175,7 @@ func (w *Marshaler) handleClaim(msg *msgClaimingPartition) {
 	if msg.ClientID == w.clientID && msg.GroupID == w.groupID {
 		fireEvents(true)
 	} else {
-		fireEvents(true)
+		fireEvents(false)
 	}
 }
 
