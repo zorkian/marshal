@@ -116,12 +116,13 @@ func newClaim(topic string, partID int, marshal *Marshaler) *claim {
 // state.
 func (c *claim) updateOffsetsLoop() {
 	ctr := 0
-	for {
-		time.Sleep(HeartbeatInterval * time.Second)
-		log.Debugf("%s:%d updating offsets", c.topic, c.partID)
+	for c.Claimed() {
+		jitter := c.rand.Intn(HeartbeatInterval/2) + (HeartbeatInterval / 2)
+		time.Sleep(time.Duration(jitter) * time.Second)
 		c.updateOffsets(ctr)
 		ctr++
 	}
+	log.Infof("%s:%d no longer claimed, offset loop exiting", c.topic, c.partID)
 }
 
 // setup is the initial worker that initializes the claim structure. Until this is done,
@@ -167,7 +168,7 @@ func (c *claim) setup() {
 	go c.messagePump()
 
 	// Totally done, let the world know and move on
-	log.Infof("%s:%d Consumer claimed at offset %d (is %d behind)",
+	log.Infof("%s:%d consumer claimed at offset %d (is %d behind)",
 		c.topic, c.partID, c.offsetCurrent, c.offsetLatest-c.offsetCurrent)
 }
 
@@ -189,6 +190,17 @@ func (c *claim) Consumed(offset int64) bool {
 // that it is still an active claim.
 func (c *claim) Claimed() bool {
 	return atomic.LoadInt32(c.claimed) == 1
+}
+
+// GetCurrentLag returns this partition's cursor lag.
+func (c *claim) GetCurrentLag() int64 {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	if c.offsetCurrent < c.offsetLatest {
+		return c.offsetLatest - c.offsetCurrent
+	}
+	return 0
 }
 
 // Release will invoke our release mechanism if and only if we are still claimed.
@@ -217,12 +229,7 @@ func (c *claim) messagePump() {
 	// This method MUST NOT make changes to the claim structure. Since we might
 	// be running while someone else has the lock, and we can't get it ourselves, we are
 	// forbidden to touch anything other than the consumer and the message channel.
-	for {
-		if !c.Claimed() {
-			log.Infof("%s:%d no longer claimed, pump exiting.", c.topic, c.partID)
-			return
-		}
-
+	for c.Claimed() {
 		msg, err := c.consumer.Consume()
 		if err == proto.ErrOffsetOutOfRange {
 			// Fell out of range, presumably because we're handling this too slow, so
@@ -244,6 +251,7 @@ func (c *claim) messagePump() {
 
 		c.messages <- msg
 	}
+	log.Debugf("%s:%d no longer claimed, pump exiting", c.topic, c.partID)
 }
 
 // heartbeat is the internal "send a heartbeat" function. Calling this will immediately

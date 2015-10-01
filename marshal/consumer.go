@@ -200,14 +200,14 @@ func (c *Consumer) Terminate() {
 // partitions we will end up claiming, or we might have overclaimed and need to back off.
 // Ideally this will settle towards 0. If it continues to rise, that implies there isn't
 // enough consumer capacity.
-func (c *Consumer) GetCurrentLag() int {
+func (c *Consumer) GetCurrentLag() int64 {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	var lag int
-	for _, claim := range c.claims {
-		if claim.offsetLatest > claim.offsetCurrent {
-			lag += int(claim.offsetLatest - claim.offsetCurrent)
+	var lag int64
+	for _, cl := range c.claims {
+		if cl.Claimed() {
+			lag += cl.GetCurrentLag()
 		}
 	}
 	return lag
@@ -220,7 +220,13 @@ func (c *Consumer) GetCurrentLoad() int {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	return len(c.claims)
+	ct := 0
+	for _, cl := range c.claims {
+		if cl.Claimed() {
+			ct++
+		}
+	}
+	return ct
 }
 
 // Consume returns the next available message from the topic. If no messages are available,

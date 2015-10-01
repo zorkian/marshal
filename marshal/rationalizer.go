@@ -70,11 +70,6 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 				log.Fatalf("rationalize[%d]: failed to consume: %s", partID, err)
 			}
 
-			if !alive && msgb.Offset >= offsetNext-1 {
-				alive = true
-				w.rationalizers.Done()
-			}
-
 			msg, err := decode(msgb.Value)
 			if err != nil {
 				// Invalid message in the stream. This should never happen, but if it does, just
@@ -89,6 +84,18 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 
 			log.Debugf("Got message at offset %d: [%s]", msgb.Offset, msg.Encode())
 			out <- msg
+
+			// This is a one-time thing that fires the first time the rationalizer comes up
+			// and makes sure we actually process all of the messages.
+			if !alive && msgb.Offset >= offsetNext-1 {
+				for len(out) > 0 {
+					time.Sleep(100 * time.Millisecond)
+				}
+				log.Infof("rationalize[%d]: reached offset %d, now alive",
+					partID, msgb.Offset)
+				alive = true
+				w.rationalizers.Done()
+			}
 		}
 	}()
 	return out
