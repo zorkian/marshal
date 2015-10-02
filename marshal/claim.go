@@ -64,7 +64,7 @@ type claim struct {
 	//
 	// offsetLatest is 12, which is the offset that Kafka will assign to the message
 	// that next gets committed to the partition. This offset does not yet exist,
-	// and mit might never.
+	// and might never.
 	offsetCurrent  int64
 	offsetEarliest int64
 	offsetLatest   int64

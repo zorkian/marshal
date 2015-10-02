@@ -167,11 +167,7 @@ func (c *Consumer) claimPartitions() {
 // manageClaims is our internal state machine that handles partitions and claiming new
 // ones (or releasing ones).
 func (c *Consumer) manageClaims() {
-	for {
-		if c.Terminated() {
-			return
-		}
-
+	for !c.Terminated() {
 		// Attempt to claim more partitions, this always runs and will keep running until all
 		// partitions in the topic are claimed (by somebody).
 		c.claimPartitions()
@@ -200,7 +196,9 @@ func (c *Consumer) Terminate() {
 	defer c.lock.Unlock()
 
 	for _, claim := range c.claims {
-		claim.Release()
+		if claim != nil {
+			claim.Release()
+		}
 	}
 }
 
