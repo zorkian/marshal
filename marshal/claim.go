@@ -244,7 +244,7 @@ func (c *claim) messagePump() {
 		if err == proto.ErrOffsetOutOfRange {
 			// Fell out of range, presumably because we're handling this too slow, so
 			// let's abandon this consumer
-			log.Errorf("%s:%d error consuming: out of range, abandoning partition",
+			log.Warningf("%s:%d error consuming: out of range, abandoning partition",
 				c.topic, c.partID)
 			go c.Release()
 			return
@@ -267,10 +267,10 @@ func (c *claim) messagePump() {
 // heartbeat is the internal "send a heartbeat" function. Calling this will immediately
 // send a heartbeat to Kafka. If we fail to send a heartbeat, we will release the
 // partition.
-func (c *claim) heartbeat() {
+func (c *claim) heartbeat() bool {
 	// Unclaimed partitions don't heartbeat.
 	if atomic.LoadInt32(c.claimed) != 1 {
-		return
+		return false
 	}
 
 	c.lock.Lock()
@@ -282,6 +282,7 @@ func (c *claim) heartbeat() {
 		go c.Release()
 	}
 	c.lastHeartbeat = time.Now().Unix()
+	return true
 }
 
 // healthCheck performs a single health check against the claim. If we have failed
@@ -331,7 +332,7 @@ func (c *claim) healthCheck() bool {
 	// partition. If so, do this in a goroutine since it will involve calling out
 	// to Kafka and releasing the partition.
 	if c.cyclesBehind >= 3 {
-		log.Errorf("%s:%d consumer unhealthy, releasing",
+		log.Warningf("%s:%d consumer unhealthy, releasing",
 			c.topic, c.partID)
 		go c.Release()
 		return false
@@ -376,7 +377,7 @@ func average(vals []int64) float64 {
 	if ct == 0 {
 		return 0
 	}
-	return float64(max-min) / float64(ct)
+	return float64(max-min) / float64(ct-1)
 }
 
 // ConsumerVelocity returns the average of our consumers' velocity

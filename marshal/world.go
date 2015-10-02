@@ -26,15 +26,20 @@ type Marshaler struct {
 	clientID string
 	groupID  string
 
-	lock    sync.RWMutex
-	topics  map[string]int
-	groups  map[string]map[string]*topicState
-	jitters chan time.Duration
-
-	rationalizers sync.WaitGroup
-
+	lock     sync.RWMutex
+	topics   map[string]int
+	groups   map[string]map[string]*topicState
+	jitters  chan time.Duration
 	kafka    *kafka.Broker
 	producer kafka.Producer
+
+	// This WaitGroup is used for signalling when all of the rationalizers have
+	// finished processing.
+	rationalizers sync.WaitGroup
+
+	// rsteps is updated whenever a rationalizer processes a log entry, this is
+	// used mainly by the test suite.
+	rsteps *int32
 
 	// This is for testing only. When this is non-zero, the rationalizer will answer
 	// queries based on THIS time instead of the current, actual time.
@@ -58,6 +63,18 @@ func (w *Marshaler) refreshMetadata() error {
 	defer w.lock.Unlock()
 	w.topics = newTopics
 	return nil
+}
+
+// waitForRsteps is used by the test suite to ask the rationalizer to wait until some number
+// of events have been processed. This also returns the current rsteps when it returns.
+func (w *Marshaler) waitForRsteps(steps int) int {
+	for {
+		cval := atomic.LoadInt32(w.rsteps)
+		if cval >= int32(steps) {
+			return int(cval)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // getTopicState returns a topicState and possibly creates it and the partition state within
