@@ -11,6 +11,7 @@ package marshal
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,7 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 		producer: kfka.Producer(kafka.NewProducerConf()),
 		topics:   make(map[string]int),
 		groups:   make(map[string]map[string]*topicState),
+		jitters:  make(chan time.Duration, 100),
 	}
 
 	// Do an initial metadata fetch, this will block a bit
@@ -75,13 +77,20 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 		go ws.rationalize(id, ws.kafkaConsumerChannel(id))
 	}
 
+	// A jitter calculator, just fills a channel with random numbers so that other
+	// people don't have to build their own random generator...
+	go func() {
+		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+		for {
+			jitter := rnd.Intn(HeartbeatInterval/2) + (HeartbeatInterval / 2)
+			ws.jitters <- time.Duration(jitter) * time.Second
+		}
+	}()
+
 	// Now start the metadata refreshing goroutine
 	go func() {
-		for {
-			time.Sleep(HeartbeatInterval * time.Second)
-			if atomic.LoadInt32(ws.quit) == 1 {
-				return
-			}
+		for atomic.LoadInt32(ws.quit) != 1 {
+			time.Sleep(<-ws.jitters)
 			ws.refreshMetadata()
 		}
 	}()

@@ -2,6 +2,8 @@ package marshal
 
 import (
 	"math/rand"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	. "gopkg.in/check.v1"
@@ -28,13 +30,15 @@ func (s *ConsumerSuite) SetUpTest(c *C) {
 	c.Assert(err, IsNil)
 
 	s.cn = &Consumer{
+		alive:      new(int32),
 		marshal:    s.m,
 		topic:      "test16",
 		partitions: s.m.Partitions("test16"),
 		behavior:   CbAggressive,
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		claims:     make(map[int]*consumerClaim),
+		claims:     make(map[int]*claim),
 	}
+	atomic.StoreInt32(s.cn.alive, 1)
 }
 
 func (s *ConsumerSuite) Produce(topicName string, partID int, msgs ...string) int64 {
@@ -68,67 +72,91 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 	// lots of things can be tested.
 }
 
-func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
-	// Claim partition 0, update our offsets, produce, update offsets again, ensure everything
-	// is consistent (offsets got updated, etc)
+func (s *ConsumerSuite) TestMultiClaim(c *C) {
+	// Set up claims on two partitions, we'll put messages in both and then ensure that
+	// we get all of the messages out
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
 	c.Assert(s.cn.tryClaimPartition(1), Equals, true)
 
+	// Produce 1000 messages to the two partitions
+	for i := 0; i < 1000; i++ {
+		s.Produce("test16", i%2, strconv.Itoa(i))
+	}
+
+	// Now consume 1000 times and ensure we get exactly 1000 unique messages
+	results := make(map[string]bool)
+	for i := 0; i < 1000; i++ {
+		results[string(s.cn.Consume())] = true
+	}
+	c.Assert(len(results), Equals, 1000)
+}
+
+func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
+	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	cl := s.cn.claims[0]
+
 	// We just claimed, nothing should be unhealthy
-	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
+	c.Assert(cl.healthCheck(), Equals, true)
+	c.Assert(cl.cyclesBehind, Equals, 0)
 
-	// Now put some messages in and update offsets, then we will still be "healthy" since we
-	// haven't consumed
-	s.Produce("test16", 0, "m1", "m2", "m3")
-	c.Assert(s.cn.updateOffsets(), IsNil)
-	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
-
-	// Now consume some messages, and we'll still be healthy
+	// Put in one message and consume it making sure things work, and then update offsets.
+	s.Produce("test16", 0, "m1")
 	c.Assert(s.cn.Consume(), DeepEquals, []byte("m1"))
-	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
+	c.Assert(cl.updateOffsets(0), IsNil)
+	c.Assert(cl.healthCheck(), Equals, true)
+	c.Assert(cl.cyclesBehind, Equals, 0)
 
-	// Update the claim structure so it looks like it's behind, but it's not yet in the danger
-	// of being released
-	s.cn.claims[0].startTime -= HeartbeatInterval * 2
-	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
-	c.Assert(s.cn.claims[0].cyclesBehind, Equals, 1)
-
-	// A second call will increase the cycles behind again, but still not release
-	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
-	c.Assert(s.cn.claims[0].cyclesBehind, Equals, 2)
-
-	// And a third call, this time the partition shows up in our list
-	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 1)
-	c.Assert(s.cn.claims[0].cyclesBehind, Equals, 3)
-
-	// Now let's consume a second message and double our velocity, which will take us under
-	// the threshold and reset our behind count
+	// Produce 5, consume 3... at this point we are "unhealthy" since we are falling
+	// behind for this period
+	s.Produce("test16", 0, "m2", "m3", "m4", "m5", "m6")
 	c.Assert(s.cn.Consume(), DeepEquals, []byte("m2"))
-	c.Assert(len(s.cn.getUnhealthyClaims()), Equals, 0)
-	c.Assert(s.cn.claims[0].cyclesBehind, Equals, 0)
+	c.Assert(s.cn.Consume(), DeepEquals, []byte("m3"))
+	c.Assert(s.cn.Consume(), DeepEquals, []byte("m4"))
+	c.Assert(cl.updateOffsets(1), IsNil)
+	c.Assert(cl.healthCheck(), Equals, true)
+	c.Assert(cl.cyclesBehind, Equals, 1)
+
+	// Produce nothing and consume the last two, we become healthy again because
+	// we are caught up and our velocity is equal
+	c.Assert(s.cn.Consume(), DeepEquals, []byte("m5"))
+	c.Assert(s.cn.Consume(), DeepEquals, []byte("m6"))
+	c.Assert(cl.updateOffsets(2), IsNil)
+	c.Assert(cl.healthCheck(), Equals, true)
+	c.Assert(cl.ConsumerVelocity() == cl.PartitionVelocity(), Equals, true)
+	c.Assert(cl.cyclesBehind, Equals, 0)
+
+	// Produce again, falls behind slightly
+	s.Produce("test16", 0, "m7")
+	c.Assert(cl.updateOffsets(3), IsNil)
+	c.Assert(cl.healthCheck(), Equals, true)
+	c.Assert(cl.cyclesBehind, Equals, 1)
+
+	// Still behind
+	c.Assert(cl.updateOffsets(4), IsNil)
+	c.Assert(cl.healthCheck(), Equals, true)
+	c.Assert(cl.cyclesBehind, Equals, 2)
+
+	// Consume the last message, which will fix our velocity and let us
+	// pass as healthy again
+	c.Assert(s.cn.Consume(), DeepEquals, []byte("m7"))
+	c.Assert(cl.updateOffsets(5), IsNil)
+	c.Assert(cl.healthCheck(), Equals, true)
+	c.Assert(cl.cyclesBehind, Equals, 0)
 }
 
 func (s *ConsumerSuite) TestConsumerHeartbeat(c *C) {
-	// Claim partition 0, update our offsets, produce, update offsets again, ensure everything
-	// is consistent (offsets got updated, etc)
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
-	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3"), Equals, int64(2))
 
-	// Consume once, heartbeat unchanged
-	hb := s.cn.claims[0].lastHeartbeat
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m1"))
-	c.Assert(s.cn.claims[0].lastHeartbeat, Equals, hb)
+	// Newly claimed partition should have heartbeated
+	c.Assert(s.cn.claims[0].lastHeartbeat, Not(Equals), 0)
 
-	// Now "force" the heartbeat backwards, should cause consume to heartbeat
+	// Now reset the heartbeat to some other value
 	s.cn.claims[0].lastHeartbeat -= HeartbeatInterval
-	hb = s.cn.claims[0].lastHeartbeat
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m2"))
-	c.Assert(s.cn.claims[0].lastHeartbeat, Not(Equals), hb)
+	hb := s.cn.claims[0].lastHeartbeat
 
-	// Now consume the last, again no heartbeat
-	hb = s.cn.claims[0].lastHeartbeat
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m3"))
-	c.Assert(s.cn.claims[0].lastHeartbeat, Equals, hb)
+	// Manual heartbeat, ensure lastHeartbeat is updated
+	s.cn.claims[0].heartbeat()
+	c.Assert(s.cn.claims[0].lastHeartbeat, Not(Equals), hb)
 }
 
 func (s *ConsumerSuite) TestTryClaimPartition(c *C) {
@@ -142,9 +170,9 @@ func (s *ConsumerSuite) TestOffsetUpdates(c *C) {
 	// Claim partition 0, update our offsets, produce, update offsets again, ensure everything
 	// is consistent (offsets got updated, etc)
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
-	c.Assert(s.cn.updateOffsets(), IsNil)
+	c.Assert(s.cn.claims[0].updateOffsets(0), IsNil)
 	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3"), Equals, int64(2))
-	c.Assert(s.cn.updateOffsets(), IsNil)
+	c.Assert(s.cn.claims[0].updateOffsets(1), IsNil)
 	c.Assert(s.cn.claims[0].offsetLatest, Equals, int64(3))
 }
 

@@ -26,9 +26,10 @@ type Marshaler struct {
 	clientID string
 	groupID  string
 
-	lock   sync.RWMutex
-	topics map[string]int
-	groups map[string]map[string]*topicState
+	lock    sync.RWMutex
+	topics  map[string]int
+	groups  map[string]map[string]*topicState
+	jitters chan time.Duration
 
 	rationalizers sync.WaitGroup
 
