@@ -47,6 +47,7 @@ func (s *RationalizerSuite) TearDownTest(c *C) {
 func NewWorld() *Marshaler {
 	return &Marshaler{
 		quit:     new(int32),
+		rsteps:   new(int32),
 		clientID: "cl",
 		groupID:  "gr",
 		groups:   make(map[string]map[string]*topicState),
@@ -95,7 +96,7 @@ func (s *RationalizerSuite) TestIsClaimed(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
 	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
-	time.Sleep(5 * time.Millisecond)
+	c.Assert(s.m.waitForRsteps(1), Equals, 1)
 
 	// They heartbeated at 1, should be claimed as of 1.
 	s.m.ts = 1
@@ -118,7 +119,7 @@ func (s *RationalizerSuite) TestClaimNotMutable(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
 	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
-	time.Sleep(5 * time.Millisecond)
+	c.Assert(s.m.waitForRsteps(1), Equals, 1)
 
 	// They heartbeated at 1, should be claimed as of 1.
 	s.m.ts = 1
@@ -166,7 +167,7 @@ func (s *RationalizerSuite) TestReleaseClaim(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
 	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
-	time.Sleep(5 * time.Millisecond)
+	c.Assert(s.m.waitForRsteps(1), Equals, 1)
 
 	// They heartbeated at 1, should be claimed as of 1.
 	s.m.ts = 1
@@ -174,7 +175,7 @@ func (s *RationalizerSuite) TestReleaseClaim(c *C) {
 
 	// Someone else attempts to release the claim, this shouldn't work
 	s.out <- releasingPartition(20, "cl-bad", "gr", "test1", 0, 5)
-	time.Sleep(5 * time.Millisecond)
+	c.Assert(s.m.waitForRsteps(2), Equals, 2)
 
 	// Must be unclaimed, invalid release
 	s.m.ts = 25
@@ -182,18 +183,19 @@ func (s *RationalizerSuite) TestReleaseClaim(c *C) {
 
 	// Now they release it at position 10
 	s.out <- releasingPartition(30, "cl", "gr", "test1", 0, 10)
-	time.Sleep(5 * time.Millisecond)
+	c.Assert(s.m.waitForRsteps(3), Equals, 3)
 
 	// They released at 30, should be free as of 31
 	s.m.ts = 31
 	c.Assert(s.m.IsClaimed("test1", 0), Equals, false)
+	c.Assert(s.m.GetLastPartitionClaim("test1", 0).LastOffset, Equals, int64(10))
 }
 
 func (s *RationalizerSuite) TestClaimHandoff(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
 	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
-	time.Sleep(5 * time.Millisecond)
+	c.Assert(s.m.waitForRsteps(1), Equals, 1)
 
 	// They heartbeated at 1, should be claimed as of 1.
 	s.m.ts = 1
@@ -201,7 +203,7 @@ func (s *RationalizerSuite) TestClaimHandoff(c *C) {
 
 	// Now they hand this off to someone else who picks up the heartbeat
 	s.out <- heartbeat(10, "cl2", "gr", "test1", 0, 10)
-	time.Sleep(5 * time.Millisecond)
+	c.Assert(s.m.waitForRsteps(2), Equals, 2)
 
 	// Must be claimed, and claimed by cl2
 	s.m.ts = 25
@@ -220,7 +222,7 @@ func (s *RationalizerSuite) TestPartitionExtend(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
 	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
-	time.Sleep(5 * time.Millisecond)
+	c.Assert(s.m.waitForRsteps(1), Equals, 1)
 
 	// Ensure len is 1
 	s.m.lock.RLock()
@@ -231,7 +233,7 @@ func (s *RationalizerSuite) TestPartitionExtend(c *C) {
 
 	// Extend by 4
 	s.out <- heartbeat(2, "cl2", "gr", "test1", 4, 0)
-	time.Sleep(5 * time.Millisecond)
+	c.Assert(s.m.waitForRsteps(2), Equals, 2)
 
 	// Ensure len is 5
 	s.m.lock.RLock()

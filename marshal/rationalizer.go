@@ -207,5 +207,9 @@ func (w *Marshaler) rationalize(partID int, in <-chan message) { // Might be in 
 		case msgTypeClaimingMessages:
 			// TODO: Implement.
 		}
+
+		// Update step counter so the test suite can wait for messages to be
+		// processed in a predictable way (rather than waiting random times)
+		atomic.AddInt32(w.rsteps, 1)
 	}
 }

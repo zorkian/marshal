@@ -187,9 +187,9 @@ func (c *Consumer) Terminated() bool {
 // Terminate instructs the consumer to release its locks. This will allow other consumers
 // to begin consuming. (If you do not call this method before exiting, things will still
 // work, but more slowly.)
-func (c *Consumer) Terminate() {
+func (c *Consumer) Terminate() bool {
 	if !atomic.CompareAndSwapInt32(c.alive, 1, 0) {
-		return
+		return false
 	}
 
 	c.lock.Lock()
@@ -200,6 +200,7 @@ func (c *Consumer) Terminate() {
 			claim.Release()
 		}
 	}
+	return true
 }
 
 // GetCurrentLag returns the number of messages that this consumer is lagging by. Note that

@@ -47,6 +47,7 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 	}
 	ws := &Marshaler{
 		quit:     new(int32),
+		rsteps:   new(int32),
 		clientID: clientID,
 		groupID:  groupID,
 		kafka:    kfka,
