@@ -41,6 +41,12 @@ func (s *ConsumerSuite) SetUpTest(c *C) {
 	atomic.StoreInt32(s.cn.alive, 1)
 }
 
+func (s *ConsumerSuite) TearDownTest(c *C) {
+	s.cn.Terminate()
+	s.m.Terminate()
+	s.s.Close()
+}
+
 func (s *ConsumerSuite) Produce(topicName string, partID int, msgs ...string) int64 {
 	var protos []*proto.Message
 	for _, msg := range msgs {
@@ -56,9 +62,8 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 	c.Assert(err, IsNil)
 	defer cn.Terminate()
 
-	// A new consumer will immediately start to claim partitions, so let's give it a
-	// second and then see if it has
-	time.Sleep(500 * time.Millisecond)
+	// Wait for 2 messages to be processed
+	c.Assert(s.m.waitForRsteps(2), Equals, 2)
 	c.Assert(s.m.GetPartitionClaim("test1", 0).LastHeartbeat, Not(Equals), int64(0))
 
 	// Test basic consumption
@@ -70,6 +75,15 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 	// TODO: flesh out test, can create a second consumer and then see if it gets any
 	// partitions, etc.
 	// lots of things can be tested.
+}
+
+func (s *ConsumerSuite) TestTerminate(c *C) {
+	// Termination is supposed to release active claims that we have, ensure that
+	// this happens
+	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	c.Assert(s.cn.Terminate(), Equals, true)
+	c.Assert(s.m.waitForRsteps(3), Equals, 3)
+	c.Assert(s.m.GetPartitionClaim(s.cn.topic, 0).LastHeartbeat, Equals, int64(0))
 }
 
 func (s *ConsumerSuite) TestMultiClaim(c *C) {
@@ -164,16 +178,6 @@ func (s *ConsumerSuite) TestTryClaimPartition(c *C) {
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
 	// Should fail (can't claim a second time)
 	c.Assert(s.cn.tryClaimPartition(0), Equals, false)
-}
-
-func (s *ConsumerSuite) TestOffsetUpdates(c *C) {
-	// Claim partition 0, update our offsets, produce, update offsets again, ensure everything
-	// is consistent (offsets got updated, etc)
-	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
-	c.Assert(s.cn.claims[0].updateOffsets(0), IsNil)
-	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3"), Equals, int64(2))
-	c.Assert(s.cn.claims[0].updateOffsets(1), IsNil)
-	c.Assert(s.cn.claims[0].offsetLatest, Equals, int64(3))
 }
 
 func (s *ConsumerSuite) TestAggressiveClaim(c *C) {
