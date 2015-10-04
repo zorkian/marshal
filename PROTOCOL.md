@@ -6,7 +6,7 @@ library.
 ## Synopsis
 
 It is possible to coordinate N consumers without any shared state other than what Kafka
-provides. Without using Zookeeper, Railgun, or any other such system, and still provide
+provides. Without using Zookeeper or any other such coordination system, and still provide
 similar guarantees/functionality.
 
 The essence of this approach is that we can use a new topic in Kafka such as `__marshal`
