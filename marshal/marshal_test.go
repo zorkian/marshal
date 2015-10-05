@@ -41,6 +41,7 @@ func StartServer() *kafkatest.Server {
 	srv.MustSpawn()
 	MakeTopic(srv, MarshalTopic, 4)
 	MakeTopic(srv, "test1", 1)
+	MakeTopic(srv, "test2", 2)
 	MakeTopic(srv, "test16", 16)
 	return srv
 }

@@ -65,7 +65,7 @@ func NewConsumer(marshal *Marshaler, topicName string,
 		return nil, errors.New("Must provide a marshaler")
 	}
 
-	consumer := &Consumer{
+	c := &Consumer{
 		alive:      new(int32),
 		marshal:    marshal,
 		topic:      topicName,
@@ -74,11 +74,26 @@ func NewConsumer(marshal *Marshaler, topicName string,
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		claims:     make(map[int]*claim),
 	}
-	atomic.StoreInt32(consumer.alive, 1)
+	atomic.StoreInt32(c.alive, 1)
 
-	go consumer.manageClaims()
+	// Fast-reclaim: iterate over existing claims in this topic and see if
+	// any of them look to be ours. Do this before the claim manager kicks off.
+	if c.options.FastReclaim {
+		for partID := 0; partID < c.partitions; partID++ {
+			claim := c.marshal.GetPartitionClaim(c.topic, partID)
+			if claim.ClientID == c.marshal.ClientID() &&
+				claim.GroupID == c.marshal.GroupID() {
+				// This looks to be ours, let's do it. This is basically the fast path,
+				// and our heartbeat will happen shortly from the automatic health
+				// check which fires up immediately on newClaim.
+				log.Infof("%s:%d attempting to fast-reclaim", c.topic, partID)
+				c.claims[partID] = newClaim(c.topic, partID, c.marshal)
+			}
+		}
+	}
 
-	return consumer, nil
+	go c.manageClaims()
+	return c, nil
 }
 
 // NewConsumerOptions returns a default set of options for the Consumer.

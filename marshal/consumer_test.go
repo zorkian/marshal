@@ -2,6 +2,7 @@ package marshal
 
 import (
 	"math/rand"
+	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -196,4 +197,55 @@ func (s *ConsumerSuite) TestBalancedClaim(c *C) {
 	c.Assert(s.cn.GetCurrentLoad(), Equals, 0)
 	s.cn.claimPartitions()
 	c.Assert(s.cn.GetCurrentLoad(), Equals, 1)
+}
+
+func (s *ConsumerSuite) TestFastReclaim(c *C) {
+	// Claim some partitions then create a new consumer with fast reclaim on; this
+	// should "reclaim" the partitions automatically at the offset they were last
+	// reported at
+	cn1, err := NewConsumer(s.m, "test2", NewConsumerOptions())
+	c.Assert(err, IsNil)
+	defer cn1.Terminate()
+	s.Produce("test2", 0, "m1", "m2", "m3")
+
+	// By default the consumer will claim all partitions so let's wait for that
+	c.Assert(s.m.waitForRsteps(4), Equals, 4)
+
+	// Consume the first two messages from 0, then heartbeat to set the offset to 2
+	c.Assert(cn1.Consume(), DeepEquals, []byte("m1"))
+	c.Assert(cn1.Consume(), DeepEquals, []byte("m2"))
+	c.Assert(cn1.claims[0].heartbeat(), Equals, true)
+	c.Assert(s.m.waitForRsteps(5), Equals, 5)
+
+	// Now add some messages to the next, but only consume some
+	s.Produce("test2", 1, "p1", "p2", "p3", "p4")
+	c.Assert(cn1.Consume(), DeepEquals, []byte("m3"))
+	c.Assert(cn1.Consume(), DeepEquals, []byte("p1"))
+	c.Assert(cn1.Consume(), DeepEquals, []byte("p2"))
+	c.Assert(cn1.Consume(), DeepEquals, []byte("p3"))
+
+	// Now we "reclaim" by creating a new consumer here; this is actually bogus
+	// usage as it would normally lead to stepping on the prior consumer, but it
+	// is useful for this test.
+	cn, err := NewConsumer(s.m, "test2", NewConsumerOptions())
+	c.Assert(err, IsNil)
+	defer cn.Terminate()
+
+	// We expect the two partitions to be reclaimed with a simple heartbeat
+	// and no claim message sent
+	c.Assert(s.m.waitForRsteps(7), Equals, 7)
+	c.Assert(len(cn.claims), Equals, 2)
+	c.Assert(cn.claims[0].offsetCurrent, Equals, int64(2))
+	c.Assert(cn.claims[1].offsetCurrent, Equals, int64(0))
+
+	// There should be four messages left, but they can come in any order depending
+	// on how things get scheduled. Let's get them all and sort and verify. This
+	// does indicate we've double-consumed, but that's expected in this particular
+	// failure scenario.
+	var msgs []string
+	for i := 0; i < 4; i++ {
+		msgs = append(msgs, string(cn.Consume()))
+	}
+	sort.Strings(msgs)
+	c.Assert(msgs, DeepEquals, []string{"m3", "p1", "p2", "p3"})
 }
