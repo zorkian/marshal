@@ -273,6 +273,8 @@ func (c *claim) heartbeat() bool {
 		return false
 	}
 
+	// TODO: This holds a lock around a Kafka transaction do we really want that?
+	// Won't this block consumption pretty hard?
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
