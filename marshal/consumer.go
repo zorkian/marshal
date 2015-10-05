@@ -21,19 +21,21 @@ import (
 // ConsumerBehavior is the broad category of behaviors that encapsulate how the Consumer
 // will handle claiming/releasing partitions.
 // TODO: Turn this into a consumer options struct.
-type ConsumerBehavior int
+type ConsumerOptions struct {
+	// FastReclaim instructs the consumer to attempt to reclaim any partitions
+	// that are presently claimed by the ClientID/GroupID we have. This is useful
+	// for situations where your ClientID is predictable/stable and you want to
+	// minimize churn during restarts. This is dangerous if you have two copies
+	// of your application running with the same ClientID/GroupID.
+	// TODO: Create an instance ID for Marshaler such that we can detect when
+	// someone else has decided to use our Client/Group.
+	FastReclaim bool
 
-const (
-	// CbAggressive specifies that the consumer should attempt to claim all unclaimed
-	// partitions immediately. This is appropriate in low QPS situations where you are
-	// mainly using this library to ensure failover to standby consumers.
-	CbAggressive ConsumerBehavior = iota
-
-	// CbBalanced ramps up more slowly than CbAggressive, but is more appropriate in
-	// high QPS situations where you know that a single Consumer will never be able to
-	// handle the entire topic's traffic.
-	CbBalanced = iota
-)
+	// GreedyClaims indicates whether we should attempt to claim all unclaimed
+	// partitions on start. This is appropriate in low QPS type environments.
+	// Defaults to false/off.
+	GreedyClaims bool
+}
 
 // Consumer allows you to safely consume data from a given topic in such a way that you
 // don't need to worry about partitions and can safely split the load across as many
@@ -45,19 +47,19 @@ type Consumer struct {
 	topic      string
 	partitions int
 	rand       *rand.Rand
-	behavior   ConsumerBehavior
+	options    ConsumerOptions
 
 	// claims maps partition IDs to claim structures. The lock protects read/write
 	// access to this map.
-	claims map[int]*claim
 	lock   sync.RWMutex
+	claims map[int]*claim
 }
 
 // NewConsumer instantiates a consumer object for a given topic. You must create a
 // separate consumer for every individual topic that you want to consume from. Please
 // see the documentation on ConsumerBehavior.
 func NewConsumer(marshal *Marshaler, topicName string,
-	behavior ConsumerBehavior) (*Consumer, error) {
+	options ConsumerOptions) (*Consumer, error) {
 
 	if marshal == nil {
 		return nil, errors.New("Must provide a marshaler")
@@ -68,14 +70,23 @@ func NewConsumer(marshal *Marshaler, topicName string,
 		marshal:    marshal,
 		topic:      topicName,
 		partitions: marshal.Partitions(topicName),
-		behavior:   behavior,
+		options:    options,
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		claims:     make(map[int]*claim),
 	}
 	atomic.StoreInt32(consumer.alive, 1)
+
 	go consumer.manageClaims()
 
 	return consumer, nil
+}
+
+// NewConsumerOptions returns a default set of options for the Consumer.
+func NewConsumerOptions() ConsumerOptions {
+	return ConsumerOptions{
+		FastReclaim:  true,
+		GreedyClaims: false,
+	}
 }
 
 // tryClaimPartition attempts to claim a partition and make it available in the consumption
@@ -84,9 +95,6 @@ func NewConsumer(marshal *Marshaler, topicName string,
 // claiming it.
 func (c *Consumer) tryClaimPartition(partID int) bool {
 	// Partition unclaimed by us, see if it's claimed by anybody
-	// TODO: This is where we probably want to insert "claim reassertion" logic? I.e.,
-	// if the clientid/groupid are the same, here is where we would promote the claim
-	// back into our own structure so the consumer would just pick up where it left off
 	currentClaim := c.marshal.GetPartitionClaim(c.topic, partID)
 	if currentClaim.LastHeartbeat > 0 {
 		return false
@@ -156,9 +164,8 @@ func (c *Consumer) claimPartitions() {
 			continue
 		}
 
-		// Balanced mode means we abort our claim now, since we've got one, whereas
-		// aggressive claims as many as it can
-		if c.behavior == CbBalanced {
+		// If greedy claims is disabled, finish here
+		if !c.options.GreedyClaims {
 			break
 		}
 	}

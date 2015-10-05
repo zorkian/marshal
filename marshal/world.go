@@ -22,15 +22,20 @@ import (
 // is thread safe. Creating one of these will create connections to your Kafka
 // cluster and begin actively monitoring the coordination topic.
 type Marshaler struct {
+	// These members are not protected by the lock and can be read at any
+	// time as they're write-once or only ever atomically updated. They must
+	// never be overwritten once a Marshaler is created.
 	quit     *int32
 	clientID string
 	groupID  string
+	jitters  chan time.Duration
+	kafka    *kafka.Broker
 
+	// Lock protects the following members; you must have this lock in order to
+	// read from or write to these.
 	lock     sync.RWMutex
 	topics   map[string]int
 	groups   map[string]map[string]*topicState
-	jitters  chan time.Duration
-	kafka    *kafka.Broker
 	producer kafka.Producer
 
 	// This WaitGroup is used for signalling when all of the rationalizers have
@@ -48,8 +53,8 @@ type Marshaler struct {
 
 // refreshMetadata is periodically used to update our internal state with topic information
 // about the world.
-func (w *Marshaler) refreshMetadata() error {
-	md, err := w.kafka.Metadata()
+func (m *Marshaler) refreshMetadata() error {
+	md, err := m.kafka.Metadata()
 	if err != nil {
 		return err
 	}
@@ -59,17 +64,17 @@ func (w *Marshaler) refreshMetadata() error {
 		newTopics[topic.Name] = len(topic.Partitions)
 	}
 
-	w.lock.Lock()
-	defer w.lock.Unlock()
-	w.topics = newTopics
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	m.topics = newTopics
 	return nil
 }
 
 // waitForRsteps is used by the test suite to ask the rationalizer to wait until some number
 // of events have been processed. This also returns the current rsteps when it returns.
-func (w *Marshaler) waitForRsteps(steps int) int {
+func (m *Marshaler) waitForRsteps(steps int) int {
 	for {
-		cval := atomic.LoadInt32(w.rsteps)
+		cval := atomic.LoadInt32(m.rsteps)
 		if cval >= int32(steps) {
 			return int(cval)
 		}
@@ -79,14 +84,14 @@ func (w *Marshaler) waitForRsteps(steps int) int {
 
 // getTopicState returns a topicState and possibly creates it and the partition state within
 // the State.
-func (w *Marshaler) getTopicState(topicName string, partID int) *topicState {
-	w.lock.Lock()
-	defer w.lock.Unlock()
+func (m *Marshaler) getTopicState(topicName string, partID int) *topicState {
+	m.lock.Lock()
+	defer m.lock.Unlock()
 
-	group, ok := w.groups[w.groupID]
+	group, ok := m.groups[m.groupID]
 	if !ok {
 		group = make(map[string]*topicState)
-		w.groups[w.groupID] = group
+		m.groups[m.groupID] = group
 	}
 
 	topic, ok := group[topicName]
@@ -109,12 +114,12 @@ func (w *Marshaler) getTopicState(topicName string, partID int) *topicState {
 }
 
 // Topics returns the list of known topics.
-func (w *Marshaler) Topics() []string {
-	w.lock.RLock()
-	defer w.lock.RUnlock()
+func (m *Marshaler) Topics() []string {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
 
-	topics := make([]string, 0, len(w.topics))
-	for topic := range w.topics {
+	topics := make([]string, 0, len(m.topics))
+	for topic := range m.topics {
 		topics = append(topics, topic)
 	}
 	return topics
@@ -122,39 +127,39 @@ func (w *Marshaler) Topics() []string {
 
 // Partitions returns the count of how many partitions are in a given topic. Returns 0 if a
 // topic is unknown.
-func (w *Marshaler) Partitions(topicName string) int {
-	w.lock.RLock()
-	defer w.lock.RUnlock()
+func (m *Marshaler) Partitions(topicName string) int {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
 
-	count, _ := w.topics[topicName]
+	count, _ := m.topics[topicName]
 	return count
 }
 
 // Terminate is called when we're done with the marshaler and want to shut down.
-func (w *Marshaler) Terminate() {
-	atomic.StoreInt32(w.quit, 1)
+func (m *Marshaler) Terminate() {
+	atomic.StoreInt32(m.quit, 1)
 }
 
 // IsClaimed returns the current status on whether or not a partition is claimed by any other
 // consumer in our group (including ourselves). A topic/partition that does not exist is
 // considered to be unclaimed.
-func (w *Marshaler) IsClaimed(topicName string, partID int) bool {
+func (m *Marshaler) IsClaimed(topicName string, partID int) bool {
 	// The contract of this method is that if it returns something and the heartbeat is
 	// non-zero, the partition is claimed.
-	claim := w.GetPartitionClaim(topicName, partID)
+	claim := m.GetPartitionClaim(topicName, partID)
 	return claim.LastHeartbeat > 0
 }
 
 // GetPartitionClaim returns a PartitionClaim structure for a given partition. The structure
 // describes the consumer that is currently claiming this partition. This is a copy of the
 // claim structure, so changing it cannot change the world state.
-func (w *Marshaler) GetPartitionClaim(topicName string, partID int) PartitionClaim {
-	topic := w.getTopicState(topicName, partID)
+func (m *Marshaler) GetPartitionClaim(topicName string, partID int) PartitionClaim {
+	topic := m.getTopicState(topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
 
-	if topic.partitions[partID].isClaimed(w.ts) {
+	if topic.partitions[partID].isClaimed(m.ts) {
 		return topic.partitions[partID] // copy.
 	}
 	return PartitionClaim{}
@@ -163,8 +168,8 @@ func (w *Marshaler) GetPartitionClaim(topicName string, partID int) PartitionCla
 // GetLastPartitionClaim returns a PartitionClaim structure for a given partition. The structure
 // describes the consumer that is currently or most recently claiming this partition. This is a
 // copy of the claim structure, so changing it cannot change the world state.
-func (w *Marshaler) GetLastPartitionClaim(topicName string, partID int) PartitionClaim {
-	topic := w.getTopicState(topicName, partID)
+func (m *Marshaler) GetLastPartitionClaim(topicName string, partID int) PartitionClaim {
+	topic := m.getTopicState(topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
@@ -175,21 +180,21 @@ func (w *Marshaler) GetLastPartitionClaim(topicName string, partID int) Partitio
 // GetPartitionOffsets returns the current state of a topic/partition. This has to hit Kafka
 // twice to ask about a partition, but it returns the full state of information that can be
 // used to calculate consumer lag.
-func (w *Marshaler) GetPartitionOffsets(topicName string, partID int) (
+func (m *Marshaler) GetPartitionOffsets(topicName string, partID int) (
 	offsetEarliest, offsetLatest, offsetCurrent int64, err error) {
 
-	offsetEarliest, err = w.kafka.OffsetEarliest(topicName, int32(partID))
+	offsetEarliest, err = m.kafka.OffsetEarliest(topicName, int32(partID))
 	if err != nil {
 		return 0, 0, 0, err
 	}
 
-	offsetLatest, err = w.kafka.OffsetLatest(topicName, int32(partID))
+	offsetLatest, err = m.kafka.OffsetLatest(topicName, int32(partID))
 	if err != nil {
 		return 0, 0, 0, err
 	}
 
 	// Use the last claim we know about, whatever it is
-	claim := w.GetLastPartitionClaim(topicName, partID)
+	claim := m.GetLastPartitionClaim(topicName, partID)
 	return offsetEarliest, offsetLatest, claim.LastOffset, nil
 }
 
@@ -197,17 +202,18 @@ func (w *Marshaler) GetPartitionOffsets(topicName string, partID int) (
 // attempt to claim the partition on your behalf. This is the low level function, you probably
 // want to use a MarshaledConsumer. Returns a bool on whether or not the claim succeeded and
 // whether you can continue.
-func (w *Marshaler) ClaimPartition(topicName string, partID int) bool {
-	topic := w.getTopicState(topicName, partID)
+func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
+	topic := m.getTopicState(topicName, partID)
 
 	// Unlock is later, since this function might take a while
+	// TODO: Move this logic to a func and defer the lock (for sanity sake)
 	topic.lock.Lock()
 
 	// If the topic is already claimed, we can short circuit the decision process
-	if topic.partitions[partID].isClaimed(w.ts) {
+	if topic.partitions[partID].isClaimed(m.ts) {
 		defer topic.lock.Unlock()
-		if topic.partitions[partID].GroupID == w.groupID &&
-			topic.partitions[partID].ClientID == w.clientID {
+		if topic.partitions[partID].GroupID == m.groupID &&
+			topic.partitions[partID].ClientID == m.clientID {
 			return true
 		}
 		log.Warningf("Attempt to claim already claimed partition.")
@@ -226,13 +232,13 @@ func (w *Marshaler) ClaimPartition(topicName string, partID int) bool {
 	cl := &msgClaimingPartition{
 		msgBase: msgBase{
 			Time:     int(time.Now().Unix()),
-			ClientID: w.clientID,
-			GroupID:  w.groupID,
+			ClientID: m.clientID,
+			GroupID:  m.groupID,
 			Topic:    topicName,
 			PartID:   partID,
 		},
 	}
-	_, err := w.producer.Produce(MarshalTopic, 0,
+	_, err := m.producer.Produce(MarshalTopic, 0,
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
 		// If we failed to produce, this is probably serious so we should undo the work
@@ -249,20 +255,20 @@ func (w *Marshaler) ClaimPartition(topicName string, partID int) bool {
 // Heartbeat will send an update for other people to know that we're still alive and
 // still owning this partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
-func (w *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) error {
-	topic := w.getTopicState(topicName, partID)
+func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) error {
+	topic := m.getTopicState(topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
 
 	// If the topic is not claimed, we can short circuit the decision process
-	if !topic.partitions[partID].isClaimed(w.ts) {
+	if !topic.partitions[partID].isClaimed(m.ts) {
 		return fmt.Errorf("Partition %s:%d is not claimed!", topicName, partID)
 	}
 
 	// And if it's not claimed by us...
-	if topic.partitions[partID].GroupID != w.groupID ||
-		topic.partitions[partID].ClientID != w.clientID {
+	if topic.partitions[partID].GroupID != m.groupID ||
+		topic.partitions[partID].ClientID != m.clientID {
 		return fmt.Errorf("Partition %s:%d is not claimed by us!", topicName, partID)
 	}
 
@@ -270,15 +276,15 @@ func (w *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 	cl := &msgHeartbeat{
 		msgBase: msgBase{
 			Time:     int(time.Now().Unix()),
-			ClientID: w.clientID,
-			GroupID:  w.groupID,
+			ClientID: m.clientID,
+			GroupID:  m.groupID,
 			Topic:    topicName,
 			PartID:   partID,
 		},
 		LastOffset: lastOffset,
 	}
 	// TODO: Use non-0 partition
-	_, err := w.producer.Produce(MarshalTopic, 0,
+	_, err := m.producer.Produce(MarshalTopic, 0,
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
 		return fmt.Errorf("Failed to produce heartbeat to Kafka: %s", err)
@@ -290,20 +296,20 @@ func (w *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 // ReleasePartition will send an update for other people to know that we're done with
 // a partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
-func (w *Marshaler) ReleasePartition(topicName string, partID int, lastOffset int64) error {
-	topic := w.getTopicState(topicName, partID)
+func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset int64) error {
+	topic := m.getTopicState(topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
 
 	// If the topic is not claimed, we can short circuit the decision process
-	if !topic.partitions[partID].isClaimed(w.ts) {
+	if !topic.partitions[partID].isClaimed(m.ts) {
 		return fmt.Errorf("Partition %s:%d is not claimed!", topicName, partID)
 	}
 
 	// And if it's not claimed by us...
-	if topic.partitions[partID].GroupID != w.groupID ||
-		topic.partitions[partID].ClientID != w.clientID {
+	if topic.partitions[partID].GroupID != m.groupID ||
+		topic.partitions[partID].ClientID != m.clientID {
 		return fmt.Errorf("Partition %s:%d is not claimed by us!", topicName, partID)
 	}
 
@@ -311,19 +317,29 @@ func (w *Marshaler) ReleasePartition(topicName string, partID int, lastOffset in
 	cl := &msgReleasingPartition{
 		msgBase: msgBase{
 			Time:     int(time.Now().Unix()),
-			ClientID: w.clientID,
-			GroupID:  w.groupID,
+			ClientID: m.clientID,
+			GroupID:  m.groupID,
 			Topic:    topicName,
 			PartID:   partID,
 		},
 		LastOffset: lastOffset,
 	}
 	// TODO: Use non-0 partition
-	_, err := w.producer.Produce(MarshalTopic, 0,
+	_, err := m.producer.Produce(MarshalTopic, 0,
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
 		return fmt.Errorf("Failed to produce release to Kafka: %s", err)
 	}
 
 	return nil
+}
+
+// ClientID returns the client ID we're using
+func (m *Marshaler) ClientID() string {
+	return m.clientID
+}
+
+// GroupID returns the group ID we're using
+func (m *Marshaler) GroupID() string {
+	return m.groupID
 }
