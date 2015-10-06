@@ -9,6 +9,8 @@
 package marshal
 
 import (
+	"crypto/md5"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -25,11 +27,12 @@ type Marshaler struct {
 	// These members are not protected by the lock and can be read at any
 	// time as they're write-once or only ever atomically updated. They must
 	// never be overwritten once a Marshaler is created.
-	quit     *int32
-	clientID string
-	groupID  string
-	jitters  chan time.Duration
-	kafka    *kafka.Broker
+	quit       *int32
+	clientID   string
+	groupID    string
+	jitters    chan time.Duration
+	kafka      *kafka.Broker
+	partitions int
 
 	// Lock protects the following members; you must have this lock in order to
 	// read from or write to these.
@@ -82,6 +85,17 @@ func (m *Marshaler) waitForRsteps(steps int) int {
 	}
 }
 
+// getClaimPartition calculates which partition a topic should use for coordination. This uses
+// a hashing function (non-cryptographic) to predictably partition the topic space.
+func (m *Marshaler) getClaimPartition(topicName string) int {
+	// We use MD5 because it's a fast and good hashing algorithm and we don't need cryptographic
+	// properties. We then take the first 8 bytes and treat them as a uint64 and modulo that
+	// across how many partitions we have.
+	hash := md5.Sum([]byte(topicName))
+	uval := binary.LittleEndian.Uint64(hash[0:8])
+	return int(uval % uint64(m.partitions))
+}
+
 // getTopicState returns a topicState and possibly creates it and the partition state within
 // the State.
 func (m *Marshaler) getTopicState(topicName string, partID int) *topicState {
@@ -97,7 +111,8 @@ func (m *Marshaler) getTopicState(topicName string, partID int) *topicState {
 	topic, ok := group[topicName]
 	if !ok {
 		topic = &topicState{
-			partitions: make([]PartitionClaim, partID+1),
+			claimPartition: m.getClaimPartition(topicName),
+			partitions:     make([]PartitionClaim, partID+1),
 		}
 		group[topicName] = topic
 	}
@@ -238,7 +253,7 @@ func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
 			PartID:   partID,
 		},
 	}
-	_, err := m.producer.Produce(MarshalTopic, 0,
+	_, err := m.producer.Produce(MarshalTopic, int32(topic.claimPartition),
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
 		// If we failed to produce, this is probably serious so we should undo the work
@@ -283,8 +298,7 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 		},
 		LastOffset: lastOffset,
 	}
-	// TODO: Use non-0 partition
-	_, err := m.producer.Produce(MarshalTopic, 0,
+	_, err := m.producer.Produce(MarshalTopic, int32(topic.claimPartition),
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
 		return fmt.Errorf("Failed to produce heartbeat to Kafka: %s", err)
@@ -324,8 +338,7 @@ func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset in
 		},
 		LastOffset: lastOffset,
 	}
-	// TODO: Use non-0 partition
-	_, err := m.producer.Produce(MarshalTopic, 0,
+	_, err := m.producer.Produce(MarshalTopic, int32(topic.claimPartition),
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
 		return fmt.Errorf("Failed to produce release to Kafka: %s", err)

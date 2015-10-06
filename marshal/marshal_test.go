@@ -47,10 +47,20 @@ func StartServer() *kafkatest.Server {
 }
 
 func (s *MarshalSuite) TestNewMarshaler(c *C) {
+	// Test that Marshaler starts up and learns about the topics.
 	c.Assert(s.m.Partitions(MarshalTopic), Equals, 4)
 	c.Assert(s.m.Partitions("test1"), Equals, 1)
+	c.Assert(s.m.Partitions("test2"), Equals, 2)
 	c.Assert(s.m.Partitions("test16"), Equals, 16)
 	c.Assert(s.m.Partitions("unknown"), Equals, 0)
+
+	// If our hash algorithm changes, these values will have to change. This tests the low
+	// level hash function.
+	c.Assert(s.m.getClaimPartition("test1"), Equals, 2)
+	c.Assert(s.m.getClaimPartition("test2"), Equals, 1)
+	c.Assert(s.m.getClaimPartition("test16"), Equals, 0)
+	c.Assert(s.m.getClaimPartition("unknown"), Equals, 1)
+	c.Assert(s.m.getClaimPartition("unknown"), Equals, 1) // Twice on purpose.
 }
 
 // This is a full integration test of claiming including writing to Kafka via the marshaler

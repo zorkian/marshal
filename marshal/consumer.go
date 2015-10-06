@@ -18,9 +18,7 @@ import (
 	"github.com/optiopay/kafka/proto"
 )
 
-// ConsumerBehavior is the broad category of behaviors that encapsulate how the Consumer
-// will handle claiming/releasing partitions.
-// TODO: Turn this into a consumer options struct.
+// ConsumerOptions represents all of the options that a consumer can be configured with.
 type ConsumerOptions struct {
 	// FastReclaim instructs the consumer to attempt to reclaim any partitions
 	// that are presently claimed by the ClientID/GroupID we have. This is useful

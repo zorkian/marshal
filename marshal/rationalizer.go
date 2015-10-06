@@ -24,11 +24,11 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 		// Figure out how many messages are in this topic
 		offsetFirst, err := w.kafka.OffsetEarliest(MarshalTopic, int32(partID))
 		if err != nil {
-			log.Fatalf("rationalize[%d]: Failed to get offset: %s", err)
+			log.Fatalf("rationalize[%d]: failed to get offset: %s", partID, err)
 		}
 		offsetNext, err := w.kafka.OffsetLatest(MarshalTopic, int32(partID))
 		if err != nil {
-			log.Fatalf("rationalize[%d]: Failed to get offset: %s", err)
+			log.Fatalf("rationalize[%d]: failed to get offset: %s", partID, err)
 		}
 		log.Debugf("rationalize[%d]: offsets %d to %d", partID, offsetFirst, offsetNext)
 
@@ -82,7 +82,7 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 				continue
 			}
 
-			log.Debugf("Got message at offset %d: [%s]", msgb.Offset, msg.Encode())
+			log.Errorf("rationalize[%d]: @%d: [%s]", partID, msgb.Offset, msg.Encode())
 			out <- msg
 
 			// This is a one-time thing that fires the first time the rationalizer comes up

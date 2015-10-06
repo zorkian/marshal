@@ -65,16 +65,16 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 
 	// If there is no marshal topic, then we can't run. The admins must go create the topic
 	// before they can use this library. Please see the README.
-	marshalPartitions := ws.Partitions(MarshalTopic)
-	if marshalPartitions == 0 {
+	ws.partitions = ws.Partitions(MarshalTopic)
+	if ws.partitions == 0 {
 		return nil, errors.New("Marshalling topic not found. Please see the documentation.")
 	}
 
 	// Now we start a goroutine to start consuming each of the partitions in the marshal
 	// topic. Note that this doesn't handle increasing the partition count on that topic
 	// without stopping all consumers.
-	ws.rationalizers.Add(marshalPartitions)
-	for id := 0; id < marshalPartitions; id++ {
+	ws.rationalizers.Add(ws.partitions)
+	for id := 0; id < ws.partitions; id++ {
 		go ws.rationalize(id, ws.kafkaConsumerChannel(id))
 	}
 
@@ -94,6 +94,14 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 			time.Sleep(<-ws.jitters)
 			log.Infof("Refreshing topic metadata.")
 			ws.refreshMetadata()
+
+			// See if the number of partitions in the marshal topic went up. If so, this is a
+			// fatal error as it means we lose coordination. In theory a mass die-off of workers
+			// is bad, but so is upsharding the coordination topic without shutting down
+			// everything. At least this limits the damage horizon?
+			if ws.Partitions(MarshalTopic) != ws.partitions {
+				log.Fatalf("Marshal topic partition count changed. FATAL!")
+			}
 		}
 	}()
 
