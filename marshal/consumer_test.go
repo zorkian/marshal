@@ -34,7 +34,7 @@ func (s *ConsumerSuite) SetUpTest(c *C) {
 		marshal:    s.m,
 		topic:      "test16",
 		partitions: s.m.Partitions("test16"),
-		behavior:   CbAggressive,
+		options:    NewConsumerOptions(),
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		claims:     make(map[int]*claim),
 	}
@@ -58,7 +58,10 @@ func (s *ConsumerSuite) Produce(topicName string, partID int, msgs ...string) in
 }
 
 func (s *ConsumerSuite) TestNewConsumer(c *C) {
-	cn, err := NewConsumer(s.m, "test1", CbAggressive)
+	options := NewConsumerOptions()
+	options.GreedyClaims = true
+
+	cn, err := NewConsumer(s.m, "test1", options)
 	c.Assert(err, IsNil)
 	defer cn.Terminate()
 
@@ -182,6 +185,7 @@ func (s *ConsumerSuite) TestTryClaimPartition(c *C) {
 
 func (s *ConsumerSuite) TestAggressiveClaim(c *C) {
 	// Ensure aggressive mode claims all partitions in a single call to claim
+	s.cn.options.GreedyClaims = true
 	c.Assert(s.cn.GetCurrentLoad(), Equals, 0)
 	s.cn.claimPartitions()
 	c.Assert(s.cn.GetCurrentLoad(), Equals, 16)
@@ -189,7 +193,6 @@ func (s *ConsumerSuite) TestAggressiveClaim(c *C) {
 
 func (s *ConsumerSuite) TestBalancedClaim(c *C) {
 	// Ensure balanced mode only claims one partition
-	s.cn.behavior = CbBalanced
 	c.Assert(s.cn.GetCurrentLoad(), Equals, 0)
 	s.cn.claimPartitions()
 	c.Assert(s.cn.GetCurrentLoad(), Equals, 1)

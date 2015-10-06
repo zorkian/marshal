@@ -26,40 +26,27 @@ func main() {
 	// locks we're holding so other consumers can pick them up.
 	defer marshaler.Terminate()
 
-	// Now let's start up an aggressive consumer, this is most appropriate when you have a low
-	// QPS topic that can be fully consumed by a single process. You can run multiple processes,
-	// but you will likely see unbalanced loads. That's OK.
-	littleConsumer, err := marshal.NewConsumer(marshaler, "quiet-topic", marshal.CbAggressive)
+	// Now we set up a basic consumer; and we enable GreedyClaims which is useful in low QPS
+	// environments as it will cause the consumer to claim as many partitions as it can
+	// up front. Of course, if you have a very busy topic with many partitions, you will
+	// not want to use this.
+	options := marshal.NewConsumerOptions()
+	options.GreedyClaims = true
+
+	consumer, err := marshal.NewConsumer(marshaler, "some-topic", options)
 	if err != nil {
 		log.Fatalf("Failed to construct consumer: %s", err)
 	}
-	defer littleConsumer.Terminate()
+	defer consumer.Terminate()
 
-	// Let's send off a goroutine to handle this topic. We think one is going to be enough,
-	// so it's not too busy.
-	go func() {
-		for {
-			msg := littleConsumer.Consume()
-			log.Info("Got quiet topic message: %s", msg)
-		}
-	}()
-
-	// Now let's build a balanced consumer. This is best in situations where a topic has many
-	// partitions and high QPS. This helps the cluster start out more evenly loaded at the cost
-	// of a slightly slower start.
-	bigConsumer, err := marshal.NewConsumer(marshaler, "busy-topic", marshal.CbBalanced)
-	if err != nil {
-		log.Fatalf("Failed to construct consumer: %s", err)
-	}
-	defer bigConsumer.Terminate()
-
-	// Since this is a busy topic, let's spin up a couple of goroutines to handle the messages.
-	// Note that Consume is safe to call from lots of places at the same time.
+	// You can spin up many goroutines to process messages; how many depends entirely on the type
+	// of workload you have.
 	for i := 0; i < 10; i++ {
+		i := i
 		go func() {
 			for {
-				msg := bigConsumer.Consume()
-				log.Info("Got busy topic message: %s", msg)
+				msg := consumer.Consume()
+				log.Info("[%d] got message: %s", i, msg)
 			}
 		}()
 	}

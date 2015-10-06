@@ -41,7 +41,7 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 	// marshaler for every client/group.
 	brokerConf := kafka.NewBrokerConf("PortalMarshal")
 
-	kfka, err := kafka.Dial(brokers, brokerConf)
+	broker, err := kafka.Dial(brokers, brokerConf)
 	if err != nil {
 		return nil, err
 	}
@@ -50,8 +50,8 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 		rsteps:   new(int32),
 		clientID: clientID,
 		groupID:  groupID,
-		kafka:    kfka,
-		producer: kfka.Producer(kafka.NewProducerConf()),
+		kafka:    broker,
+		producer: broker.Producer(kafka.NewProducerConf()),
 		topics:   make(map[string]int),
 		groups:   make(map[string]map[string]*topicState),
 		jitters:  make(chan time.Duration, 100),
@@ -92,6 +92,7 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 	go func() {
 		for atomic.LoadInt32(ws.quit) != 1 {
 			time.Sleep(<-ws.jitters)
+			log.Infof("Refreshing topic metadata.")
 			ws.refreshMetadata()
 		}
 	}()
