@@ -82,7 +82,7 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 				continue
 			}
 
-			log.Errorf("rationalize[%d]: @%d: [%s]", partID, msgb.Offset, msg.Encode())
+			log.Debugf("rationalize[%d]: @%d: [%s]", partID, msgb.Offset, msg.Encode())
 			out <- msg
 
 			// This is a one-time thing that fires the first time the rationalizer comes up
