@@ -15,7 +15,11 @@ import (
 
 // topicState contains information about a given topic.
 type topicState struct {
-	// This lock also protects the contenst of the partitions.
+	// claimPartition is which Marshal topic partition to use for coordination of this topic.
+	// Read only, set at initialization time so not protected by the lock.
+	claimPartition int
+
+	// This lock also protects the contents of the partitions member.
 	lock       sync.RWMutex
 	partitions []PartitionClaim
 }

@@ -46,11 +46,12 @@ func (s *RationalizerSuite) TearDownTest(c *C) {
 
 func NewWorld() *Marshaler {
 	return &Marshaler{
-		quit:     new(int32),
-		rsteps:   new(int32),
-		clientID: "cl",
-		groupID:  "gr",
-		groups:   make(map[string]map[string]*topicState),
+		quit:       new(int32),
+		rsteps:     new(int32),
+		clientID:   "cl",
+		groupID:    "gr",
+		groups:     make(map[string]map[string]*topicState),
+		partitions: 1,
 	}
 }
 
