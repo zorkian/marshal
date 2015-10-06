@@ -32,25 +32,30 @@ const (
 // NewMarshaler connects to a cluster (given broker addresses) and prepares to handle marshalling
 // requests. Given the way this system works, the marshaler has to process all messages in the
 // topic before it's safely able to begin operating. This might take a while.
-//
-// TODO: This should possibly not return until it has actually finished processing and is set
-// up? I.e., all rationalizers report ready.
 func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error) {
 	// TODO: It might be nice to make the marshaler agnostic of clients and able to support
 	// requests from N clients/groups. For now, though, we require instantiating a new
 	// marshaler for every client/group.
 	brokerConf := kafka.NewBrokerConf("PortalMarshal")
-
 	broker, err := kafka.Dial(brokers, brokerConf)
 	if err != nil {
 		return nil, err
 	}
+
+	// Get offset coordinator so we can look up (and save) committed offsets later.
+	coordinatorConf := kafka.NewOffsetCoordinatorConf(groupID)
+	coordinator, err := broker.OffsetCoordinator(coordinatorConf)
+	if err != nil {
+		return nil, err
+	}
+
 	ws := &Marshaler{
 		quit:     new(int32),
 		rsteps:   new(int32),
 		clientID: clientID,
 		groupID:  groupID,
 		kafka:    broker,
+		offsets:  coordinator,
 		producer: broker.Producer(kafka.NewProducerConf()),
 		topics:   make(map[string]int),
 		groups:   make(map[string]map[string]*topicState),

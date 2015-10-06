@@ -78,13 +78,29 @@ type claim struct {
 // claim of a single partition.
 func newClaim(topic string, partID int, marshal *Marshaler) *claim {
 	// Get all available offset information
-	oEarly, oLate, oCur, err := marshal.GetPartitionOffsets(topic, partID)
+	oEarly, oLate, oCur, oComm, err := marshal.GetPartitionOffsets(topic, partID)
 	if err != nil {
 		log.Errorf("%s:%d failed to get offsets: %s", topic, partID, err)
 		return nil
 	}
-	log.Debugf("%s:%d consumer offsets: early = %d, cur = %d, late = %d",
-		topic, partID, oEarly, oCur, oLate)
+	log.Debugf("%s:%d consumer offsets: early = %d, cur/comm = %d/%d, late = %d",
+		topic, partID, oEarly, oCur, oComm, oLate)
+
+	// Take the greatest of the committed/current offset, this means we will recover from
+	// a situation where the last time this partition was claimed has fallen out of our
+	// coordination memory.
+	if oComm > 0 && oComm > oCur {
+		if oCur > 0 {
+			// This state shouldn't really happen. This implies that someone went back in time
+			// and started consuming earlier than the committed offset.
+			log.Warningf("%s:%d committed offset is %d but heartbeat offset was %d",
+				topic, partID, oComm, oCur)
+		} else {
+			log.Infof("%s:%d recovering committed offset of %d",
+				topic, partID, oComm)
+		}
+		oCur = oComm
+	}
 
 	// Construct object and set it up
 	obj := &claim{
@@ -273,17 +289,26 @@ func (c *claim) heartbeat() bool {
 		return false
 	}
 
-	// TODO: This holds a lock around a Kafka transaction do we really want that?
-	// Won't this block consumption pretty hard?
-	c.lock.Lock()
-	defer c.lock.Unlock()
+	// Take lock briefly to get the data we need and then dispatch the heartbeat
+	// asynchronously
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 
-	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsetCurrent)
-	if err != nil {
-		log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
-		go c.Release()
-	}
-	c.lastHeartbeat = time.Now().Unix()
+	offset := c.offsetCurrent
+
+	go func() {
+		err := c.marshal.Heartbeat(c.topic, c.partID, offset)
+		if err != nil {
+			log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
+			go c.Release()
+		}
+
+		// Now we have to update our structure with the heartbeat, requires the lock
+		c.lock.Lock()
+		defer c.lock.Unlock()
+		c.lastHeartbeat = time.Now().Unix()
+	}()
+
 	return true
 }
 
@@ -338,12 +363,11 @@ func (c *claim) healthCheck() bool {
 			c.topic, c.partID)
 		go c.Release()
 		return false
-	} else {
-		log.Warningf("%s:%d consumer unhealthy: CV %0.2f < PV %0.2f",
-			c.topic, c.partID, consumerVelocity, partitionVelocity)
 	}
 
 	// Clearly we haven't been behind for long enough, so we're still "healthy"
+	log.Warningf("%s:%d consumer unhealthy: CV %0.2f < PV %0.2f (warning #%d)",
+		c.topic, c.partID, consumerVelocity, partitionVelocity, c.cyclesBehind)
 	return true
 }
 
@@ -401,7 +425,7 @@ func (c *claim) PartitionVelocity() float64 {
 // updateOffsets will update the offsets of our current partition.
 func (c *claim) updateOffsets(ctr int) error {
 	// Slow, hits Kafka. Run in a goroutine.
-	oEarly, oLate, _, err := c.marshal.GetPartitionOffsets(c.topic, c.partID)
+	oEarly, oLate, _, _, err := c.marshal.GetPartitionOffsets(c.topic, c.partID)
 	if err != nil {
 		log.Errorf("%s:%d failed to get offsets: %s", c.topic, c.partID, err)
 		return err

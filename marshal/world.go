@@ -32,6 +32,7 @@ type Marshaler struct {
 	groupID    string
 	jitters    chan time.Duration
 	kafka      *kafka.Broker
+	offsets    kafka.OffsetCoordinator
 	partitions int
 
 	// Lock protects the following members; you must have this lock in order to
@@ -193,24 +194,29 @@ func (m *Marshaler) GetLastPartitionClaim(topicName string, partID int) Partitio
 }
 
 // GetPartitionOffsets returns the current state of a topic/partition. This has to hit Kafka
-// twice to ask about a partition, but it returns the full state of information that can be
+// thrice to ask about a partition, but it returns the full state of information that can be
 // used to calculate consumer lag.
 func (m *Marshaler) GetPartitionOffsets(topicName string, partID int) (
-	offsetEarliest, offsetLatest, offsetCurrent int64, err error) {
+	offsetEarliest, offsetLatest, offsetCurrent, offsetCommitted int64, err error) {
 
 	offsetEarliest, err = m.kafka.OffsetEarliest(topicName, int32(partID))
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 
 	offsetLatest, err = m.kafka.OffsetLatest(topicName, int32(partID))
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, err
+	}
+
+	offsetCommitted, _, err = m.offsets.Offset(topicName, int32(partID))
+	if err != nil {
+		return 0, 0, 0, 0, err
 	}
 
 	// Use the last claim we know about, whatever it is
 	claim := m.GetLastPartitionClaim(topicName, partID)
-	return offsetEarliest, offsetLatest, claim.LastOffset, nil
+	return offsetEarliest, offsetLatest, claim.LastOffset, offsetCommitted, nil
 }
 
 // ClaimPartition is how you can actually claim a partition. If you call this, Marshal will
@@ -304,6 +310,15 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 		return fmt.Errorf("Failed to produce heartbeat to Kafka: %s", err)
 	}
 
+	// Finally, also commit this offset to Kafka so it's available in the long-term storage
+	// of the offset coordination system
+	err = m.offsets.Commit(topicName, int32(partID), lastOffset)
+	if err != nil {
+		// Do not count this as a returned error as that will cause us to drop consumption, but
+		// do log it so people can see it
+		log.Errorf("%s:%d failed to commit offsets: %s", topicName, partID, err)
+	}
+
 	return nil
 }
 
@@ -342,6 +357,15 @@ func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset in
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
 		return fmt.Errorf("Failed to produce release to Kafka: %s", err)
+	}
+
+	// Finally, also commit this offset to Kafka so it's available in the long-term storage
+	// of the offset coordination system
+	err = m.offsets.Commit(topicName, int32(partID), lastOffset)
+	if err != nil {
+		// Do not count this as a returned error as that will cause us to drop consumption, but
+		// do log it so people can see it
+		log.Errorf("%s:%d failed to commit offsets: %s", topicName, partID, err)
 	}
 
 	return nil

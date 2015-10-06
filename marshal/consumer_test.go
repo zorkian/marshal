@@ -164,6 +164,7 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 
 func (s *ConsumerSuite) TestConsumerHeartbeat(c *C) {
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	c.Assert(s.m.waitForRsteps(1), Equals, 1)
 
 	// Newly claimed partition should have heartbeated
 	c.Assert(s.cn.claims[0].lastHeartbeat, Not(Equals), 0)
@@ -174,7 +175,43 @@ func (s *ConsumerSuite) TestConsumerHeartbeat(c *C) {
 
 	// Manual heartbeat, ensure lastHeartbeat is updated
 	s.cn.claims[0].heartbeat()
+	c.Assert(s.m.waitForRsteps(3), Equals, 3)
 	c.Assert(s.cn.claims[0].lastHeartbeat, Not(Equals), hb)
+}
+
+func (s *ConsumerSuite) TestCommittedOffset(c *C) {
+	// Test that we save/load committed offsets properly and that when we load them we will
+	// prefer them over the heartbeated values (if they're higher)
+	s.Produce("test16", 0, "m1", "m2", "m3", "m4")
+	c.Assert(s.m.offsets.Commit("test16", 0, 2), IsNil)
+	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	c.Assert(s.m.waitForRsteps(1), Equals, 1)
+	c.Assert(s.cn.claims[0].offsetCurrent, Equals, int64(2))
+
+	// Since the committed offset was 2, the first consumption should be the third message
+	c.Assert(s.cn.Consume(), DeepEquals, []byte("m3"))
+
+	// Heartbeat should succeed and update the committed offset
+	c.Assert(s.cn.claims[0].heartbeat(), Equals, true)
+	c.Assert(s.m.waitForRsteps(3), Equals, 3)
+	offset, _, err := s.m.offsets.Offset("test16", 0)
+	c.Assert(err, IsNil)
+	c.Assert(offset, Equals, int64(3))
+	c.Assert(s.cn.claims[0].Release(), Equals, true)
+	c.Assert(s.m.waitForRsteps(4), Equals, 4)
+	c.Assert(s.cn.claims[0].Claimed(), Equals, false)
+	s.cn.claims[0] = nil
+
+	// Now let's "downcommit" the offset back to an earlier value, and then re-claim the
+	// partition to verify that it sets the offset to the heartbeated value rather than
+	// the committed value
+	c.Assert(s.m.offsets.Commit("test16", 0, 2), IsNil)
+	offset, _, err = s.m.offsets.Offset("test16", 0)
+	c.Assert(err, IsNil)
+	c.Assert(offset, Equals, int64(2))
+	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	c.Assert(s.m.waitForRsteps(5), Equals, 5)
+	c.Assert(s.cn.claims[0].offsetCurrent, Equals, int64(3))
 }
 
 func (s *ConsumerSuite) TestTryClaimPartition(c *C) {
