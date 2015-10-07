@@ -289,26 +289,17 @@ func (c *claim) heartbeat() bool {
 		return false
 	}
 
-	// Take lock briefly to get the data we need and then dispatch the heartbeat
-	// asynchronously
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+	// TODO: This holds a lock around a Kafka transaction do we really want that?
+	// Won't this block consumption pretty hard?
+	c.lock.Lock()
+	defer c.lock.Unlock()
 
-	offset := c.offsetCurrent
-
-	go func() {
-		err := c.marshal.Heartbeat(c.topic, c.partID, offset)
-		if err != nil {
-			log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
-			go c.Release()
-		}
-
-		// Now we have to update our structure with the heartbeat, requires the lock
-		c.lock.Lock()
-		defer c.lock.Unlock()
-		c.lastHeartbeat = time.Now().Unix()
-	}()
-
+	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsetCurrent)
+	if err != nil {
+		log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
+		go c.Release()
+	}
+	c.lastHeartbeat = time.Now().Unix()
 	return true
 }
 
