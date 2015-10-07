@@ -186,7 +186,7 @@ func (s *ConsumerSuite) TestCommittedOffset(c *C) {
 	c.Assert(s.m.offsets.Commit("test16", 0, 2), IsNil)
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
 	c.Assert(s.m.waitForRsteps(1), Equals, 1)
-	c.Assert(s.cn.claims[0].offsetCurrent, Equals, int64(2))
+	c.Assert(s.cn.claims[0].offsets.Current, Equals, int64(2))
 
 	// Since the committed offset was 2, the first consumption should be the third message
 	c.Assert(s.cn.Consume(), DeepEquals, []byte("m3"))
@@ -211,7 +211,7 @@ func (s *ConsumerSuite) TestCommittedOffset(c *C) {
 	c.Assert(offset, Equals, int64(2))
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
 	c.Assert(s.m.waitForRsteps(5), Equals, 5)
-	c.Assert(s.cn.claims[0].offsetCurrent, Equals, int64(3))
+	c.Assert(s.cn.claims[0].offsets.Current, Equals, int64(3))
 }
 
 func (s *ConsumerSuite) TestTryClaimPartition(c *C) {
@@ -272,8 +272,8 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// and no claim message sent
 	c.Assert(s.m.waitForRsteps(7), Equals, 7)
 	c.Assert(len(cn.claims), Equals, 2)
-	c.Assert(cn.claims[0].offsetCurrent, Equals, int64(2))
-	c.Assert(cn.claims[1].offsetCurrent, Equals, int64(0))
+	c.Assert(cn.claims[0].offsets.Current, Equals, int64(2))
+	c.Assert(cn.claims[1].offsets.Current, Equals, int64(0))
 
 	// There should be four messages left, but they can come in any order depending
 	// on how things get scheduled. Let's get them all and sort and verify. This
