@@ -48,7 +48,7 @@ func (s *ClaimSuite) TestOffsetUpdates(c *C) {
 	c.Assert(s.cl.updateOffsets(0), IsNil)
 	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3"), Equals, int64(2))
 	c.Assert(s.cl.updateOffsets(1), IsNil)
-	c.Assert(s.cl.offsetLatest, Equals, int64(3))
+	c.Assert(s.cl.offsets.Latest, Equals, int64(3))
 }
 
 func (s *ClaimSuite) TestRelease(c *C) {
@@ -65,20 +65,20 @@ func (s *ClaimSuite) TestRelease(c *C) {
 
 func (s *ClaimSuite) TestCurrentLag(c *C) {
 	// Test that GetCurrentLag returns the correct numbers in various cases
-	s.cl.offsetCurrent = 0
-	s.cl.offsetLatest = 0
+	s.cl.offsets.Current = 0
+	s.cl.offsets.Latest = 0
 	c.Assert(s.cl.GetCurrentLag(), Equals, int64(0))
 
-	s.cl.offsetCurrent = 1
-	s.cl.offsetLatest = 0
+	s.cl.offsets.Current = 1
+	s.cl.offsets.Latest = 0
 	c.Assert(s.cl.GetCurrentLag(), Equals, int64(0))
 
-	s.cl.offsetCurrent = 0
-	s.cl.offsetLatest = 1
+	s.cl.offsets.Current = 0
+	s.cl.offsets.Latest = 1
 	c.Assert(s.cl.GetCurrentLag(), Equals, int64(1))
 
-	s.cl.offsetCurrent = 1
-	s.cl.offsetLatest = 2
+	s.cl.offsets.Current = 1
+	s.cl.offsets.Latest = 2
 	c.Assert(s.cl.GetCurrentLag(), Equals, int64(1))
 }
 
@@ -86,7 +86,7 @@ func (s *ClaimSuite) TestHeartbeat(c *C) {
 	// Ensure that our heartbeats are updating the marshal structures appropriately
 	// (makes sure clients are seeing the right values)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(0))
-	s.cl.offsetCurrent = 10
+	s.cl.offsets.Current = 10
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.m.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(10))
@@ -94,7 +94,7 @@ func (s *ClaimSuite) TestHeartbeat(c *C) {
 	// And test that releasing means we can't update heartbeat anymore
 	c.Assert(s.cl.Release(), Equals, true)
 	c.Assert(s.m.waitForRsteps(4), Equals, 4)
-	s.cl.offsetCurrent = 20
+	s.cl.offsets.Current = 20
 	c.Assert(s.cl.heartbeat(), Equals, false)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(0))
@@ -141,30 +141,30 @@ func (s *ClaimSuite) TestVelocity(c *C) {
 
 func (s *ClaimSuite) TestHealthCheck(c *C) {
 	// Ensure that the health check system returns expected values for given states
-	s.cl.offsetCurrent = 0
+	s.cl.offsets.Current = 0
 	s.cl.offsetCurrentHistory = [10]int64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-	s.cl.offsetLatest = 0
+	s.cl.offsets.Latest = 0
 	s.cl.offsetLatestHistory = [10]int64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	c.Assert(s.cl.healthCheck(), Equals, true)
 	c.Assert(s.cl.cyclesBehind, Equals, 0)
 
 	// Put us in an "unhealthy" state, PV is high and we aren't caught up
-	s.cl.offsetLatest = 10
+	s.cl.offsets.Latest = 10
 	s.cl.offsetLatestHistory = [10]int64{1, 10, 0, 0, 0, 0, 0, 0, 0, 0}
 	c.Assert(s.cl.healthCheck(), Equals, true)
 	c.Assert(s.cl.cyclesBehind, Equals, 1)
 
 	// Now we're "caught up" even PV>CV we're healthy
-	s.cl.offsetCurrent = 21
+	s.cl.offsets.Current = 21
 	s.cl.offsetCurrentHistory = [10]int64{1, 6, 11, 16, 21, 0, 0, 0, 0, 0}
-	s.cl.offsetLatest = 21
+	s.cl.offsets.Latest = 21
 	s.cl.offsetLatestHistory = [10]int64{1, 11, 21, 0, 0, 0, 0, 0, 0, 0}
 	c.Assert(s.cl.ConsumerVelocity() < s.cl.PartitionVelocity(), Equals, true)
 	c.Assert(s.cl.healthCheck(), Equals, true)
 	c.Assert(s.cl.cyclesBehind, Equals, 0)
 
 	// Now we're behind and fail health checks 3 times, this will release
-	s.cl.offsetLatest = 31
+	s.cl.offsets.Latest = 31
 	s.cl.offsetLatestHistory = [10]int64{1, 11, 21, 31, 0, 0, 0, 0, 0, 0}
 	c.Assert(s.cl.ConsumerVelocity() < s.cl.PartitionVelocity(), Equals, true)
 	c.Assert(s.cl.healthCheck(), Equals, true)
@@ -182,7 +182,7 @@ func (s *ClaimSuite) TestHealthCheck(c *C) {
 func (s *ClaimSuite) TestHealthCheckRelease(c *C) {
 	// Test that an expired heartbeat causes the partition to get immediately released
 	s.cl.lastHeartbeat -= HeartbeatInterval * 2
-	s.cl.offsetCurrent = 5
+	s.cl.offsets.Current = 5
 	c.Assert(s.cl.healthCheck(), Equals, false)
 	c.Assert(s.m.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))

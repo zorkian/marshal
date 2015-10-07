@@ -24,6 +24,40 @@ type topicState struct {
 	partitions []PartitionClaim
 }
 
+// PartitionOffsets is a record of offsets for a given partition. Contains information
+// combined from Kafka and our current state.
+//
+// A Kafka partition consists of N messages with offsets. In the basic case, you
+// can think of an offset like an array index. With log compaction and other trickery
+// it acts more like a sparse array, but it's a close enough metaphor.
+//
+// We keep track of four values for offsets:
+//
+//    offsets       1     2     3     7     9    10    11
+//   partition  [ msg1, msg2, msg3, msg4, msg5, msg6, msg7, ... ]
+//                 ^                  ^                      ^
+//                 \- Earliest        |                      |
+//                                    \- Current          Latest
+//
+// In this example, Earliest is 1 which is the "oldest" offset within the
+// partition. At any given time this offset might become invalid if a log rolls
+// so we might update it.
+//
+// Current is 7, which is the offset of the NEXT message i.e. this message
+// has not been consumed yet.
+//
+// Latest is 12, which is the offset that Kafka will assign to the message
+// that next gets committed to the partition. This offset does not yet exist,
+// and might never.
+//
+// Committed is the value recorded in Kafka's committed offsets system.
+type PartitionOffsets struct {
+	Current   int64
+	Earliest  int64
+	Latest    int64
+	Committed int64
+}
+
 // PartitionClaim contains claim information about a given partition.
 type PartitionClaim struct {
 	LastHeartbeat int64

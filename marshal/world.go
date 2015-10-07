@@ -118,6 +118,10 @@ func (m *Marshaler) getTopicState(topicName string, partID int) *topicState {
 		group[topicName] = topic
 	}
 
+	// Take the topic lock if we can
+	topic.lock.Lock()
+	defer topic.lock.Unlock()
+
 	// They might be referring to a partition we don't know about, maybe extend it
 	// TODO: This should have the topic lock
 	if len(topic.partitions) < partID+1 {
@@ -196,27 +200,29 @@ func (m *Marshaler) GetLastPartitionClaim(topicName string, partID int) Partitio
 // GetPartitionOffsets returns the current state of a topic/partition. This has to hit Kafka
 // thrice to ask about a partition, but it returns the full state of information that can be
 // used to calculate consumer lag.
-func (m *Marshaler) GetPartitionOffsets(topicName string, partID int) (
-	offsetEarliest, offsetLatest, offsetCurrent, offsetCommitted int64, err error) {
+func (m *Marshaler) GetPartitionOffsets(topicName string, partID int) (PartitionOffsets, error) {
+	var err error
 
-	offsetEarliest, err = m.kafka.OffsetEarliest(topicName, int32(partID))
+	o := PartitionOffsets{}
+	o.Earliest, err = m.kafka.OffsetEarliest(topicName, int32(partID))
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return PartitionOffsets{}, err
 	}
 
-	offsetLatest, err = m.kafka.OffsetLatest(topicName, int32(partID))
+	o.Latest, err = m.kafka.OffsetLatest(topicName, int32(partID))
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return PartitionOffsets{}, err
 	}
 
-	offsetCommitted, _, err = m.offsets.Offset(topicName, int32(partID))
+	o.Committed, _, err = m.offsets.Offset(topicName, int32(partID))
 	if err != nil {
-		return 0, 0, 0, 0, err
+		return PartitionOffsets{}, err
 	}
 
 	// Use the last claim we know about, whatever it is
 	claim := m.GetLastPartitionClaim(topicName, partID)
-	return offsetEarliest, offsetLatest, claim.LastOffset, offsetCommitted, nil
+	o.Current = claim.LastOffset
+	return o, nil
 }
 
 // ClaimPartition is how you can actually claim a partition. If you call this, Marshal will
