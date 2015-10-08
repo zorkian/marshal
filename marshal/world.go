@@ -216,7 +216,11 @@ func (m *Marshaler) GetPartitionOffsets(topicName string, partID int) (Partition
 
 	o.Committed, _, err = m.offsets.Offset(topicName, int32(partID))
 	if err != nil {
-		return PartitionOffsets{}, err
+		// This error happens when Kafka does not know about the partition i.e. no
+		// offset has been committed here. In that case we ignore it.
+		if err != proto.ErrUnknownTopicOrPartition {
+			return PartitionOffsets{}, fmt.Errorf("offset fetch fail: %s", err)
+		}
 	}
 
 	// Use the last claim we know about, whatever it is
