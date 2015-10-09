@@ -112,7 +112,9 @@ func (s *ConsumerSuite) TestMultiClaim(c *C) {
 
 func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	s.cn.lock.RLock()
 	cl := s.cn.claims[0]
+	s.cn.lock.RUnlock()
 
 	// We just claimed, nothing should be unhealthy
 	c.Assert(cl.healthCheck(), Equals, true)
@@ -169,7 +171,7 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 
 func (s *ConsumerSuite) TestConsumerHeartbeat(c *C) {
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
-	c.Assert(s.m.waitForRsteps(1), Equals, 1)
+	c.Assert(s.m.waitForRsteps(2), Equals, 2)
 
 	// Newly claimed partition should have heartbeated
 	c.Assert(s.cn.claims[0].lastHeartbeat, Not(Equals), 0)
@@ -190,7 +192,7 @@ func (s *ConsumerSuite) TestCommittedOffset(c *C) {
 	s.Produce("test16", 0, "m1", "m2", "m3", "m4")
 	c.Assert(s.m.offsets.Commit("test16", 0, 2), IsNil)
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
-	c.Assert(s.m.waitForRsteps(1), Equals, 1)
+	c.Assert(s.m.waitForRsteps(2), Equals, 2)
 	c.Assert(s.cn.claims[0].offsets.Current, Equals, int64(2))
 
 	// Since the committed offset was 2, the first consumption should be the third message
@@ -252,11 +254,14 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 
 	// By default the consumer will claim all partitions so let's wait for that
 	c.Assert(s.m.waitForRsteps(4), Equals, 4)
+	cn1.lock.RLock()
+	cl := cn1.claims[0]
+	cn1.lock.RUnlock()
 
 	// Consume the first two messages from 0, then heartbeat to set the offset to 2
 	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("m1"))
 	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("m2"))
-	c.Assert(cn1.claims[0].heartbeat(), Equals, true)
+	c.Assert(cl.heartbeat(), Equals, true)
 	c.Assert(s.m.waitForRsteps(5), Equals, 5)
 
 	// Now add some messages to the next, but only consume some
@@ -277,8 +282,11 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// and no claim message sent
 	c.Assert(s.m.waitForRsteps(7), Equals, 7)
 	c.Assert(len(cn.claims), Equals, 2)
-	c.Assert(cn.claims[0].offsets.Current, Equals, int64(2))
-	c.Assert(cn.claims[1].offsets.Current, Equals, int64(0))
+	cn.lock.RLock()
+	cl0, cl1 := cn.claims[0], cn.claims[1]
+	cn.lock.RUnlock()
+	c.Assert(cl0.offsets.Current, Equals, int64(2))
+	c.Assert(cl1.offsets.Current, Equals, int64(0))
 
 	// There should be four messages left, but they can come in any order depending
 	// on how things get scheduled. Let's get them all and sort and verify. This
