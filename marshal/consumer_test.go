@@ -38,6 +38,7 @@ func (s *ConsumerSuite) SetUpTest(c *C) {
 		options:    NewConsumerOptions(),
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		claims:     make(map[int]*claim),
+		messages:   make(chan *proto.Message, 1000),
 	}
 	atomic.StoreInt32(s.cn.alive, 1)
 }
@@ -72,9 +73,9 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 
 	// Test basic consumption
 	s.Produce("test1", 0, "m1", "m2", "m3")
-	c.Assert(cn.Consume(), DeepEquals, []byte("m1"))
-	c.Assert(cn.Consume(), DeepEquals, []byte("m2"))
-	c.Assert(cn.Consume(), DeepEquals, []byte("m3"))
+	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m1"))
+	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m2"))
+	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m3"))
 
 	// TODO: flesh out test, can create a second consumer and then see if it gets any
 	// partitions, etc.
@@ -104,7 +105,7 @@ func (s *ConsumerSuite) TestMultiClaim(c *C) {
 	// Now consume 1000 times and ensure we get exactly 1000 unique messages
 	results := make(map[string]bool)
 	for i := 0; i < 1000; i++ {
-		results[string(s.cn.Consume())] = true
+		results[string(s.cn.consumeOne().Value)] = true
 	}
 	c.Assert(len(results), Equals, 1000)
 }
@@ -119,7 +120,8 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 
 	// Put in one message and consume it making sure things work, and then update offsets.
 	s.Produce("test16", 0, "m1")
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m1"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m1"))
+	s.cn.claims[0].heartbeat()
 	c.Assert(cl.updateOffsets(0), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 0)
@@ -127,17 +129,19 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 	// Produce 5, consume 3... at this point we are "unhealthy" since we are falling
 	// behind for this period
 	s.Produce("test16", 0, "m2", "m3", "m4", "m5", "m6")
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m2"))
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m3"))
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m4"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m2"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m3"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m4"))
+	s.cn.claims[0].heartbeat()
 	c.Assert(cl.updateOffsets(1), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 1)
 
 	// Produce nothing and consume the last two, we become healthy again because
 	// we are caught up and our velocity is equal
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m5"))
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m6"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m5"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m6"))
+	s.cn.claims[0].heartbeat()
 	c.Assert(cl.updateOffsets(2), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.ConsumerVelocity() == cl.PartitionVelocity(), Equals, true)
@@ -156,7 +160,8 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 
 	// Consume the last message, which will fix our velocity and let us
 	// pass as healthy again
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m7"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m7"))
+	s.cn.claims[0].heartbeat()
 	c.Assert(cl.updateOffsets(5), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 0)
@@ -189,7 +194,7 @@ func (s *ConsumerSuite) TestCommittedOffset(c *C) {
 	c.Assert(s.cn.claims[0].offsets.Current, Equals, int64(2))
 
 	// Since the committed offset was 2, the first consumption should be the third message
-	c.Assert(s.cn.Consume(), DeepEquals, []byte("m3"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m3"))
 
 	// Heartbeat should succeed and update the committed offset
 	c.Assert(s.cn.claims[0].heartbeat(), Equals, true)
@@ -249,17 +254,17 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	c.Assert(s.m.waitForRsteps(4), Equals, 4)
 
 	// Consume the first two messages from 0, then heartbeat to set the offset to 2
-	c.Assert(cn1.Consume(), DeepEquals, []byte("m1"))
-	c.Assert(cn1.Consume(), DeepEquals, []byte("m2"))
+	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("m1"))
+	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("m2"))
 	c.Assert(cn1.claims[0].heartbeat(), Equals, true)
 	c.Assert(s.m.waitForRsteps(5), Equals, 5)
 
 	// Now add some messages to the next, but only consume some
 	s.Produce("test2", 1, "p1", "p2", "p3", "p4")
-	c.Assert(cn1.Consume(), DeepEquals, []byte("m3"))
-	c.Assert(cn1.Consume(), DeepEquals, []byte("p1"))
-	c.Assert(cn1.Consume(), DeepEquals, []byte("p2"))
-	c.Assert(cn1.Consume(), DeepEquals, []byte("p3"))
+	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("m3"))
+	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("p1"))
+	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("p2"))
+	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("p3"))
 
 	// Now we "reclaim" by creating a new consumer here; this is actually bogus
 	// usage as it would normally lead to stepping on the prior consumer, but it
@@ -281,7 +286,7 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// failure scenario.
 	var msgs []string
 	for i := 0; i < 4; i++ {
-		msgs = append(msgs, string(cn.Consume()))
+		msgs = append(msgs, string(cn.consumeOne().Value))
 	}
 	sort.Strings(msgs)
 	c.Assert(msgs, DeepEquals, []string{"m3", "p1", "p2", "p3"})

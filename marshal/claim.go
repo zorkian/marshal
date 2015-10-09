@@ -9,7 +9,9 @@
 package marshal
 
 import (
+	"fmt"
 	"math/rand"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +19,13 @@ import (
 	"github.com/optiopay/kafka"
 	"github.com/optiopay/kafka/proto"
 )
+
+// int64slice is for sorting.
+type int64slice []int64
+
+func (a int64slice) Len() int           { return len(a) }
+func (a int64slice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a int64slice) Less(i, j int) bool { return a[i] < a[j] }
 
 // claim is instantiated for each partition "claim" we have. This type is responsible for
 // pulling data from Kafka and managing its cursors, heartbeating as necessary, and health
@@ -38,6 +47,12 @@ type claim struct {
 	consumer      kafka.Consumer
 	messages      chan *proto.Message
 
+	// tracking is a dict that maintains information about offsets that have been
+	// sent to and acknowledged by clients. An offset is inserted into this map when
+	// we insert it into the message queue, and when it is committed we record an update
+	// saying so. This map is pruned during the heartbeats.
+	tracking map[int64]bool
+
 	// Number of heartbeat cycles this claim has been lagging, i.e., consumption is going
 	// too slowly (defined as being behind by more than 2 heartbeat cycles)
 	cyclesBehind int
@@ -49,7 +64,7 @@ type claim struct {
 
 // newClaim returns an internal claim object, used by the consumer to manage the
 // claim of a single partition.
-func newClaim(topic string, partID int, marshal *Marshaler) *claim {
+func newClaim(topic string, partID int, marshal *Marshaler, messages chan *proto.Message) *claim {
 	// Get all available offset information
 	offsets, err := marshal.GetPartitionOffsets(topic, partID)
 	if err != nil {
@@ -82,7 +97,8 @@ func newClaim(topic string, partID int, marshal *Marshaler) *claim {
 		partID:   partID,
 		claimed:  new(int32),
 		offsets:  offsets,
-		messages: make(chan *proto.Message, 100),
+		messages: messages,
+		tracking: make(map[int64]bool),
 		rand:     rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	atomic.StoreInt32(obj.claimed, 1)
@@ -159,28 +175,26 @@ func (c *claim) setup() {
 		c.topic, c.partID, c.offsets.Current, c.offsets.Latest-c.offsets.Current)
 }
 
-// Given a message offset (which should be our current offset), return whether or
-// not that offset is allowed to be consumed (i.e., we're still claimed)
-func (c *claim) Consumed(offset int64) bool {
+// Commit is called by a Consumer class when the client has indicated that it has finished
+// processing a message. This updates our tracking structure so the heartbeat knows how
+// far ahead it can move our offset.
+func (c *claim) Commit(msg *proto.Message) error {
 	if atomic.LoadInt32(c.claimed) != 1 {
-		return false
+		return fmt.Errorf("%s:%d is no longer claimed; can't commit offset %d",
+			c.topic, c.partID, msg.Offset)
 	}
 
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	// If our heartbeat has gone at all stale, don't allow consumption from this
-	// partition. In fact, trigger an immediate release without waiting for the
-	// healthcheck loop.
-	if c.lastHeartbeat < time.Now().Unix()-HeartbeatInterval {
-		log.Errorf("%s:%d has gone stale during consumption",
-			c.topic, c.partID)
-		go c.Release()
-		return false
+	_, ok := c.tracking[msg.Offset]
+	if !ok {
+		// This is bogus; committing an offset we've never seen?
+		return fmt.Errorf("%s:%d: committing offset %d but we've never seen it",
+			c.topic, c.partID, msg.Offset)
 	}
-
-	c.offsets.Current = offset + 1
-	return true
+	c.tracking[msg.Offset] = true
+	return nil
 }
 
 // Claimed returns whether or not this claim structure is alive and well and believes
@@ -235,8 +249,7 @@ func (c *claim) messagePump() {
 				c.topic, c.partID)
 			go c.Release()
 			return
-		}
-		if err != nil {
+		} else if err != nil {
 			log.Errorf("%s:%d error consuming: %s", c.topic, c.partID, err)
 
 			// Often a consumption error is caused by data going away, such as if we're consuming
@@ -246,6 +259,13 @@ func (c *claim) messagePump() {
 			continue
 		}
 
+		// Briefly get the lock to update our tracking map... I wish there were
+		// goroutine safe maps in Go.
+		c.lock.Lock()
+		c.tracking[msg.Offset] = false
+		c.lock.Unlock()
+
+		// Push the message down to the client (this bypasses the Consumer)
 		c.messages <- msg
 	}
 	log.Debugf("%s:%d no longer claimed, pump exiting", c.topic, c.partID)
@@ -265,6 +285,37 @@ func (c *claim) heartbeat() bool {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	// Get the sorted set of offsets
+	offsets := make(int64slice, 0, len(c.tracking))
+	for key, _ := range c.tracking {
+		offsets = append(offsets, key)
+	}
+	sort.Sort(offsets)
+
+	// Now iterate the offsets bottom up and increment our current offset until we
+	// see the first uncommitted offset (oldest message)
+	for _, offset := range offsets {
+		if !c.tracking[offset] {
+			break
+		}
+		// Remember current is always "last processed + 1", see the docs on
+		// PartitionOffset for a reminder.
+		c.offsets.Current = offset + 1
+		delete(c.tracking, offset)
+	}
+
+	// If we end up with more than 10000 outstanding messages, then something is
+	// probably broken in the implementation... since that will cause us to grow
+	// forever in memory, let's abandon ship
+	if len(c.tracking) > 1000 {
+		log.Warningf("%s:%d has %d uncommitted offsets; are you calling Commit?",
+			c.topic, c.partID, len(offsets))
+	} else if len(c.tracking) > 10000 {
+		log.Fatalf("%s:%d had %d uncommitted offsets. You must call Commit.",
+			c.topic, c.partID, len(offsets))
+	}
+
+	// Now heartbeat this value and update our heartbeat time
 	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
 		log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)

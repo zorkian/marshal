@@ -1,6 +1,8 @@
 package marshal
 
 import (
+	"time"
+
 	. "gopkg.in/check.v1"
 
 	"github.com/optiopay/kafka/kafkatest"
@@ -13,18 +15,20 @@ type ClaimSuite struct {
 	c  *C
 	s  *kafkatest.Server
 	m  *Marshaler
+	ch chan *proto.Message
 	cl *claim
 }
 
 func (s *ClaimSuite) SetUpTest(c *C) {
 	s.c = c
 	s.s = StartServer()
+	s.ch = make(chan *proto.Message, 10)
 
 	var err error
 	s.m, err = NewMarshaler("cl", "gr", []string{s.s.Addr()})
 	c.Assert(err, IsNil)
 
-	s.cl = newClaim("test16", 0, s.m)
+	s.cl = newClaim("test16", 0, s.m, s.ch)
 }
 
 func (s *ClaimSuite) TearDownTest(c *C) {
@@ -49,6 +53,82 @@ func (s *ClaimSuite) TestOffsetUpdates(c *C) {
 	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3"), Equals, int64(2))
 	c.Assert(s.cl.updateOffsets(1), IsNil)
 	c.Assert(s.cl.offsets.Latest, Equals, int64(3))
+}
+
+func (s *ClaimSuite) consumeOne(c *C) *proto.Message {
+	select {
+	case msg := <-s.ch:
+		return msg
+	case <-time.After(1 * time.Second):
+		c.Error("Timed out consuming a message.")
+	}
+	return nil
+}
+
+func (s *ClaimSuite) TestCommit(c *C) {
+	// Test the commit message flow, ensuring that our offset only gets updated when
+	// we have properly committed messages
+	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3", "m4", "m5", "m6"), Equals, int64(5))
+	c.Assert(s.cl.updateOffsets(0), IsNil)
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	c.Assert(s.cl.offsets.Earliest, Equals, int64(0))
+	c.Assert(s.cl.offsets.Latest, Equals, int64(6))
+
+	// Consume 1, heartbeat... offsets still 0
+	msg1 := s.consumeOne(c)
+	c.Assert(len(s.cl.tracking), Equals, 6)
+	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	c.Assert(s.cl.tracking[0], Equals, false)
+
+	// Consume 2, still 0
+	msg2 := s.consumeOne(c)
+	c.Assert(msg2.Value, DeepEquals, []byte("m2"))
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+
+	// Commit 1, offset 1 but only after heartbeat phase
+	c.Assert(s.cl.Commit(msg1), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(len(s.cl.tracking), Equals, 5)
+
+	// Consume 3, heartbeat, offset 1
+	msg3 := s.consumeOne(c)
+	c.Assert(msg3.Value, DeepEquals, []byte("m3"))
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+
+	// Commit #3, offset will stay 1!
+	c.Assert(s.cl.Commit(msg3), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(len(s.cl.tracking), Equals, 5)
+
+	// Commit #2, offset now advances to 3
+	c.Assert(s.cl.Commit(msg2), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(3))
+	c.Assert(len(s.cl.tracking), Equals, 3)
+
+	// Attempt to commit invalid offset (never seen), make sure it errors
+	msg3.Offset = 95
+	c.Assert(s.cl.Commit(msg3), NotNil)
+
+	// Commit the rest
+	c.Assert(s.cl.Commit(s.consumeOne(c)), IsNil)
+	c.Assert(s.cl.Commit(s.consumeOne(c)), IsNil)
+	c.Assert(s.cl.Commit(s.consumeOne(c)), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(3))
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(6))
+	c.Assert(len(s.cl.tracking), Equals, 0)
 }
 
 func (s *ClaimSuite) TestRelease(c *C) {
