@@ -39,14 +39,24 @@ func main() {
 	}
 	defer consumer.Terminate()
 
+	// Now we can get the consumption channel. Messages will be available in this channel
+	// and you can consume from it in many different goroutines if your message processing
+	// is such that it takes a while.
+	msgChan := consumer.ConsumeChannel()
+
 	// You can spin up many goroutines to process messages; how many depends entirely on the type
 	// of workload you have.
 	for i := 0; i < 10; i++ {
 		i := i
 		go func() {
 			for {
-				msg := consumer.Consume()
-				log.Info("[%d] got message: %s", i, msg)
+				msg := <-msgChan
+				log.Info("[%d] got message: %s", i, msg.Value)
+
+				// Now we have to commit the message now that we're done with it. If you don't
+				// commit, then Marshal will never record forward progress and will eventually
+				// terminate.
+				consumer.Commit(msg)
 			}
 		}()
 	}
