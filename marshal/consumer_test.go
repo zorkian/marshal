@@ -221,6 +221,42 @@ func (s *ConsumerSuite) TestCommittedOffset(c *C) {
 	c.Assert(s.cn.claims[0].offsets.Current, Equals, int64(3))
 }
 
+func (s *ConsumerSuite) TestStrictOrdering(c *C) {
+	// Test that we can strict ordering semantics
+	s.cn.options.StrictOrdering = true
+	s.Produce("test16", 0, "m1", "m2", "m3", "m4")
+	s.Produce("test16", 1, "m1", "m2", "m3", "m4")
+	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	c.Assert(s.cn.tryClaimPartition(1), Equals, true)
+	c.Assert(s.m.waitForRsteps(4), Equals, 4)
+
+	msg1 := <-s.cn.messages
+	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
+	msg2 := <-s.cn.messages
+	c.Assert(msg2.Value, DeepEquals, []byte("m1"))
+
+	// This should time out (no messages available)
+	select {
+	case <-s.cn.messages:
+		c.Error("Expected timeout, got message.")
+	case <-time.After(300 * time.Millisecond):
+		// Nothing, this is good.
+	}
+
+	// Commit the first message, expect a single new message
+	c.Assert(s.cn.Commit(msg1), IsNil)
+	msg3 := <-s.cn.messages
+	c.Assert(msg3.Value, DeepEquals, []byte("m2"))
+
+	// This should time out (no messages available)
+	select {
+	case <-s.cn.messages:
+		c.Error("Expected timeout, got message.")
+	case <-time.After(300 * time.Millisecond):
+		// Nothing, this is good.
+	}
+}
+
 func (s *ConsumerSuite) TestTryClaimPartition(c *C) {
 	// Should work
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)

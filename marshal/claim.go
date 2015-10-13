@@ -38,12 +38,13 @@ type claim struct {
 
 	// lock protects all access to the member variables of this struct except for the
 	// messages channel, which can be read from or written to without holding the lock.
-	lock          sync.RWMutex
+	lock          *sync.RWMutex
 	offsets       PartitionOffsets
 	marshal       *Marshaler
 	rand          *rand.Rand
 	claimed       *int32
 	lastHeartbeat int64
+	options       ConsumerOptions
 	consumer      kafka.Consumer
 	messages      chan *proto.Message
 
@@ -51,7 +52,9 @@ type claim struct {
 	// sent to and acknowledged by clients. An offset is inserted into this map when
 	// we insert it into the message queue, and when it is committed we record an update
 	// saying so. This map is pruned during the heartbeats.
-	tracking map[int64]bool
+	tracking               map[int64]bool
+	outstandingMessages    int
+	outstandingMessageWait *sync.Cond
 
 	// Number of heartbeat cycles this claim has been lagging, i.e., consumption is going
 	// too slowly (defined as being behind by more than 2 heartbeat cycles)
@@ -64,7 +67,8 @@ type claim struct {
 
 // newClaim returns an internal claim object, used by the consumer to manage the
 // claim of a single partition.
-func newClaim(topic string, partID int, marshal *Marshaler, messages chan *proto.Message) *claim {
+func newClaim(topic string, partID int, marshal *Marshaler,
+	messages chan *proto.Message, options ConsumerOptions) *claim {
 	// Get all available offset information
 	offsets, err := marshal.GetPartitionOffsets(topic, partID)
 	if err != nil {
@@ -92,16 +96,19 @@ func newClaim(topic string, partID int, marshal *Marshaler, messages chan *proto
 
 	// Construct object and set it up
 	obj := &claim{
+		lock:     &sync.RWMutex{},
 		marshal:  marshal,
 		topic:    topic,
 		partID:   partID,
 		claimed:  new(int32),
 		offsets:  offsets,
 		messages: messages,
+		options:  options,
 		tracking: make(map[int64]bool),
 		rand:     rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	atomic.StoreInt32(obj.claimed, 1)
+	obj.outstandingMessageWait = sync.NewCond(obj.lock)
 
 	// Now try to actually claim it, this can block a while
 	log.Infof("%s:%d consumer attempting to claim", topic, partID)
@@ -194,6 +201,14 @@ func (c *claim) Commit(msg *proto.Message) error {
 			c.topic, c.partID, msg.Offset)
 	}
 	c.tracking[msg.Offset] = true
+	c.outstandingMessages--
+	// And now if we're using strict ordering mode, we can wake up the messagePump to
+	// advise it that it's ready to continue with its life
+	if c.options.StrictOrdering {
+		if c.outstandingMessages == 0 {
+			c.outstandingMessageWait.Signal()
+		}
+	}
 	return nil
 }
 
@@ -262,7 +277,15 @@ func (c *claim) messagePump() {
 		// Briefly get the lock to update our tracking map... I wish there were
 		// goroutine safe maps in Go.
 		c.lock.Lock()
+		if c.options.StrictOrdering {
+			// Wait for there to be no outstanding messages so we can guarantee the
+			// ordering.
+			for c.outstandingMessages > 0 {
+				c.outstandingMessageWait.Wait()
+			}
+		}
 		c.tracking[msg.Offset] = false
+		c.outstandingMessages++
 		c.lock.Unlock()
 
 		// Push the message down to the client (this bypasses the Consumer)
@@ -318,6 +341,8 @@ func (c *claim) heartbeat() bool {
 		log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
 		go c.Release()
 	}
+	log.Debugf("%s:%d heartbeat: current offset %d with %d uncommitted messages",
+		c.offsets.Current, c.outstandingMessages)
 	c.lastHeartbeat = time.Now().Unix()
 	return true
 }
