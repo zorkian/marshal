@@ -46,6 +46,7 @@ type Consumer struct {
 	partitions int
 	rand       *rand.Rand
 	options    ConsumerOptions
+	messages   chan *proto.Message
 
 	// claims maps partition IDs to claim structures. The lock protects read/write
 	// access to this map.
@@ -69,6 +70,7 @@ func NewConsumer(marshal *Marshaler, topicName string,
 		topic:      topicName,
 		partitions: marshal.Partitions(topicName),
 		options:    options,
+		messages:   make(chan *proto.Message, 1000),
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		claims:     make(map[int]*claim),
 	}
@@ -85,7 +87,7 @@ func NewConsumer(marshal *Marshaler, topicName string,
 				// and our heartbeat will happen shortly from the automatic health
 				// check which fires up immediately on newClaim.
 				log.Infof("%s:%d attempting to fast-reclaim", c.topic, partID)
-				c.claims[partID] = newClaim(c.topic, partID, c.marshal)
+				c.claims[partID] = newClaim(c.topic, partID, c.marshal, c.messages)
 			}
 		}
 	}
@@ -115,7 +117,7 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 
 	// Set up internal claim structure we'll track things in, this can block for a while
 	// as it talks to Kafka and waits for rationalizers.
-	newclaim := newClaim(c.topic, partID, c.marshal)
+	newclaim := newClaim(c.topic, partID, c.marshal, c.messages)
 	if newclaim == nil {
 		return false
 	}
@@ -257,47 +259,32 @@ func (c *Consumer) GetCurrentLoad() int {
 	return ct
 }
 
-// Consume returns the next available message from the topic. If no messages are available,
-// it will block until one is.
-func (c *Consumer) Consume() []byte {
-	// TODO: This is almost certainly a slow implementation as we have to scan everything
-	// every time.
-	for {
-		var cl *claim
-		var msg *proto.Message
+// ConsumeChannel returns a read-only channel. Messages that are retrieved from Kafka will be
+// made available in this channel.
+func (c *Consumer) ConsumeChannel() <-chan *proto.Message {
+	return c.messages
+}
 
-		// TODO: This implementation also can lead to queue starvation since we start at the
-		// front every time. This might be OK, since we'll still consume as many messages
-		// as we can and the unconsumed ones will get released.
-		// TODO: Rethink this locking.
-		c.lock.RLock()
-		for _, trycl := range c.claims {
-			select {
-			case msg = <-trycl.messages:
-				cl = trycl
-			default:
-				// Do nothing.
-			}
-			if msg != nil {
-				break
-			}
-		}
-		c.lock.RUnlock()
+// consumeOne returns a single message. This is mostly used within the test suite to
+// make testing easier as it simulates the message handling behavior.
+func (c *Consumer) consumeOne() *proto.Message {
+	msg := <-c.messages
+	c.Commit(msg)
+	return msg
+}
 
-		// TODO: This is braindead.
-		if msg == nil {
-			time.Sleep(50 * time.Millisecond)
-			continue
-		}
+// Commit is called when you've finished processing a message. In the at-least-once
+// consumption case, this will allow the "last processed offset" to move forward so that
+// we can never see this message again. This operation does nothing for at-most-once
+// consumption, as the commit happens in the Consume phase.
+// TODO: AMO description is wrong.
+func (c *Consumer) Commit(msg *proto.Message) error {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 
-		// Inform the claimholder that we've consumed this message offset so that it
-		// can update its internal structures.
-		if cl.Consumed(msg.Offset) {
-			return msg.Value
-		}
-
-		// If we get here, then we retrieved a message for a partition that is not
-		// presently claimed, so let's just pretend we didn't and continue back to the top
-		// for the next message
+	claim, ok := c.claims[int(msg.Partition)]
+	if !ok {
+		return errors.New("Message not committed (partition claim expired).")
 	}
+	return claim.Commit(msg)
 }

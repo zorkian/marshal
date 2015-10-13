@@ -56,8 +56,12 @@ func main() {
     consumer, _ := marshal.NewConsumer(marshaler, "some-topic", marshal.CbAggressive)
     defer consumer.Terminate()
 
+    msgChan := consumer.ConsumeChannel()
+
     for {
-        fmt.Printf("Consumed message: %s", consumer.Consume())
+        msg := <-msgChan
+        fmt.Printf("Consumed message: %s", msg.Value)
+        consumer.Commit(msg)
     }
 }
 ```
