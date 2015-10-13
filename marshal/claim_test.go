@@ -133,6 +133,22 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(len(s.cl.tracking), Equals, 0)
 }
 
+func (s *ClaimSuite) BenchmarkConsumeAndCommit(c *C) {
+	// Produce N messages for consumption into the test partition and hopefully this
+	// doesn't end up being the really slow part of the operation
+	msgs := make([]string, 0, c.N)
+	for i := 0; i < c.N; i++ {
+		msgs = append(msgs, "message")
+	}
+	s.Produce("test16", 0, msgs...)
+
+	// Now consume everything and immediately commit it
+	for i := 0; i < c.N; i++ {
+		msg := s.consumeOne(c)
+		s.cl.Commit(msg)
+	}
+}
+
 func (s *ClaimSuite) TestRelease(c *C) {
 	// Test that calling Release on a claim properly sets the flag and releases the
 	// partition

@@ -306,13 +306,10 @@ func (c *claim) heartbeat() bool {
 
 	// If we end up with more than 10000 outstanding messages, then something is
 	// probably broken in the implementation... since that will cause us to grow
-	// forever in memory, let's abandon ship
-	if len(c.tracking) > 1000 {
-		log.Warningf("%s:%d has %d uncommitted offsets; are you calling Commit?",
-			c.topic, c.partID, len(offsets))
-	} else if len(c.tracking) > 10000 {
-		log.Fatalf("%s:%d had %d uncommitted offsets. You must call Commit.",
-			c.topic, c.partID, len(offsets))
+	// forever in memory, let's alert the user
+	if len(c.tracking) > 10000 {
+		log.Errorf("%s:%d has %d uncommitted offsets. You must call Commit.",
+			c.topic, c.partID, len(c.tracking))
 	}
 
 	// Now heartbeat this value and update our heartbeat time
