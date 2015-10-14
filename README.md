@@ -198,9 +198,33 @@ their clocks, you will not be able to get deterministic behavior. Sorry.
 Marshal also relies on all actors being good actors. Malicious users can cause the system to act
 unpredictably or at their choosing.
 
-## Bugs
+## Frequently Asked Questions
 
-They are legion. This is a new project. There are tests, however, and we very much welcome
+Here are some questions we've seen. For more, see us on IRC.
+
+### My consumers are unbalanced; one has more partitions than the others.
+
+This is a design property of Marshal's implementation. We start with the premise that we can
+capably health check ourself and determine whether or not we are keeping up with our current
+claims. If that's true, then it doesn't matter how many partitions we have -- we'll be healthy.
+
+This means that we can end up in a state where one consumer has several partitions and another
+consumer has fewer (or none), but Marshal guarantees that all of them will be healthy.
+
+### My consumer isn't claiming any partitions.
+
+This usually happens when you are reusing Client IDs and your consumer has previously become
+unhealthy and released partitions. A sick consumer will not reclaim partitions it has previously
+released.
+
+Make sure you have multiple consumers with different Client IDs, or make sure that in the
+single consumer use case you are using randomly generated Client IDs every time your program
+starts.
+
+## Bugs and Contact
+
+There may be bugs. This is a new project. There are tests, however, and we very much welcome
 the submission of bug reports, pull requests, etc.
 
-https://github.com/zorkian/marshal
+Github: https://github.com/zorkian/marshal
+IRC: #marshal on Freenode
