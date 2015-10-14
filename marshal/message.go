@@ -20,10 +20,31 @@ import (
 type msgType int
 
 const (
-	msgTypeHeartbeat          msgType = iota
-	msgTypeClaimingPartition  msgType = iota
-	msgTypeReleasingPartition msgType = iota
-	msgTypeClaimingMessages   msgType = iota
+	msgLengthBase int = 8
+	idxType       int = 0
+	idxVersion    int = 1
+	idxTimestamp  int = 2
+	idxInstanceID int = 3
+	idxClientID   int = 4
+	idxGroupID    int = 5
+	idxTopic      int = 6
+	idxPartID     int = 7
+	idxBaseEnd    int = 7 // Index of last element in base message.
+
+	msgTypeHeartbeat   msgType = 0
+	msgLengthHeartbeat int     = msgLengthBase + 1
+	idxHBLastOffset    int     = idxBaseEnd + 1
+
+	msgTypeClaimingPartition   msgType = 1
+	msgLengthClaimingPartition int     = msgLengthBase
+
+	msgTypeReleasingPartition   msgType = 2
+	msgLengthReleasingPartition int     = msgLengthBase + 1
+	idxRPLastOffset             int     = idxBaseEnd + 1
+
+	msgTypeClaimingMessages   msgType = 3
+	msgLengthClaimingMessages int     = msgLengthBase + 1
+	idxCMProposedLastOffset   int     = idxBaseEnd + 1
 )
 
 type message interface {
@@ -35,58 +56,65 @@ type message interface {
 // decode it into one of our message structs.
 func decode(inp []byte) (message, error) {
 	parts := strings.Split(string(inp), "/")
-	if len(parts) < 6 {
-		return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+	if len(parts) < msgLengthBase {
+		return nil, fmt.Errorf("Invalid message (length): [%s]", string(inp))
+	}
+
+	version, err := strconv.Atoi(parts[idxVersion])
+	if err != nil {
+		return nil, fmt.Errorf("Invalid message (version): [%s]", string(inp))
 	}
 
 	// Get out the base message which is always present as it identifies the sender.
-	partID, err := strconv.Atoi(parts[5])
+	partID, err := strconv.Atoi(parts[idxPartID])
 	if err != nil {
-		return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+		return nil, fmt.Errorf("Invalid message (partID): [%s]", string(inp))
 	}
-	ts, err := strconv.Atoi(parts[1])
+	ts, err := strconv.Atoi(parts[idxTimestamp])
 	if err != nil {
-		return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+		return nil, fmt.Errorf("Invalid message (timestamp): [%s]", string(inp))
 	}
 	base := msgBase{
-		Time:     ts,
-		ClientID: parts[2],
-		GroupID:  parts[3],
-		Topic:    parts[4],
-		PartID:   partID,
+		Version:    version,
+		Time:       ts,
+		InstanceID: parts[idxInstanceID],
+		ClientID:   parts[idxClientID],
+		GroupID:    parts[idxGroupID],
+		Topic:      parts[idxTopic],
+		PartID:     partID,
 	}
 
 	switch parts[0] {
 	case "Heartbeat":
-		if len(parts) != 7 {
-			return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+		if len(parts) != msgLengthHeartbeat {
+			return nil, fmt.Errorf("Invalid message (hb length): [%s]", string(inp))
 		}
-		offset, err := strconv.ParseInt(parts[6], 10, 0)
+		offset, err := strconv.ParseInt(parts[idxHBLastOffset], 10, 0)
 		if err != nil {
-			return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+			return nil, fmt.Errorf("Invalid message (hb offset): [%s]", string(inp))
 		}
 		return &msgHeartbeat{msgBase: base, LastOffset: int64(offset)}, nil
 	case "ClaimingPartition":
-		if len(parts) != 6 {
-			return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+		if len(parts) != msgLengthClaimingPartition {
+			return nil, fmt.Errorf("Invalid message (cp length): [%s]", string(inp))
 		}
 		return &msgClaimingPartition{msgBase: base}, nil
 	case "ReleasingPartition":
-		if len(parts) != 7 {
-			return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+		if len(parts) != msgLengthReleasingPartition {
+			return nil, fmt.Errorf("Invalid message (rp length): [%s]", string(inp))
 		}
-		offset, err := strconv.ParseInt(parts[6], 10, 0)
+		offset, err := strconv.ParseInt(parts[idxRPLastOffset], 10, 0)
 		if err != nil {
-			return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+			return nil, fmt.Errorf("Invalid message (rp offset): [%s]", string(inp))
 		}
 		return &msgReleasingPartition{msgBase: base, LastOffset: offset}, nil
 	case "ClaimingMessages":
-		if len(parts) != 7 {
-			return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+		if len(parts) != msgLengthClaimingMessages {
+			return nil, fmt.Errorf("Invalid message (cm length): [%s]", string(inp))
 		}
-		offset, err := strconv.ParseInt(parts[6], 10, 0)
+		offset, err := strconv.ParseInt(parts[idxCMProposedLastOffset], 10, 0)
 		if err != nil {
-			return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
+			return nil, fmt.Errorf("Invalid message (cm offset): [%s]", string(inp))
 		}
 		return &msgClaimingMessages{msgBase: base, ProposedLastOffset: offset}, nil
 	}
@@ -94,16 +122,19 @@ func decode(inp []byte) (message, error) {
 }
 
 type msgBase struct {
-	Time     int
-	ClientID string
-	GroupID  string
-	Topic    string
-	PartID   int
+	Version    int
+	Time       int
+	InstanceID string
+	ClientID   string
+	GroupID    string
+	Topic      string
+	PartID     int
 }
 
 // Encode returns a string representation of the message.
 func (m *msgBase) Encode() string {
-	return fmt.Sprintf("%d/%s/%s/%s/%d", m.Time, m.ClientID, m.GroupID, m.Topic, m.PartID)
+	return fmt.Sprintf("%d/%d/%s/%s/%s/%s/%d",
+		m.Version, m.Time, m.InstanceID, m.ClientID, m.GroupID, m.Topic, m.PartID)
 }
 
 // Type returns the type of this message.

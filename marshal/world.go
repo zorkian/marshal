@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"code.google.com/p/go-uuid/uuid"
 	"github.com/optiopay/kafka"
 	"github.com/optiopay/kafka/proto"
 )
@@ -28,6 +29,7 @@ type Marshaler struct {
 	// time as they're write-once or only ever atomically updated. They must
 	// never be overwritten once a Marshaler is created.
 	quit       *int32
+	instanceID string
 	clientID   string
 	groupID    string
 	jitters    chan time.Duration
@@ -53,6 +55,14 @@ type Marshaler struct {
 	// This is for testing only. When this is non-zero, the rationalizer will answer
 	// queries based on THIS time instead of the current, actual time.
 	ts int64
+}
+
+// newInstanceID creates a new random instance ID for use inside Marshal messages. This
+// is generated new every time we restart.
+func newInstanceID() string {
+	// A UUID4 starts with 8 random characters, so let's use that as our instance ID.
+	// This should be a good tradeoff between randomness and brevity.
+	return uuid.New()[0:8]
 }
 
 // refreshMetadata is periodically used to update our internal state with topic information
