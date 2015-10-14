@@ -206,7 +206,7 @@ func (c *claim) Commit(msg *proto.Message) error {
 	// advise it that it's ready to continue with its life
 	if c.options.StrictOrdering {
 		if c.outstandingMessages == 0 {
-			c.outstandingMessageWait.Signal()
+			defer c.outstandingMessageWait.Signal()
 		}
 	}
 	return nil

@@ -59,7 +59,7 @@ func (s *ClaimSuite) consumeOne(c *C) *proto.Message {
 	select {
 	case msg := <-s.ch:
 		return msg
-	case <-time.After(1 * time.Second):
+	case <-time.After(3 * time.Second):
 		c.Error("Timed out consuming a message.")
 	}
 	return nil
@@ -178,8 +178,29 @@ func (s *ClaimSuite) BenchmarkConsumeAndCommit(c *C) {
 
 	// Now consume everything and immediately commit it
 	for i := 0; i < c.N; i++ {
-		msg := s.consumeOne(c)
-		s.cl.Commit(msg)
+		if msg := s.consumeOne(c); msg != nil {
+			s.cl.Commit(msg)
+		}
+	}
+}
+
+func (s *ClaimSuite) BenchmarkOrderedConsumeAndCommit(c *C) {
+	// Turn on ordering to slow everything down...
+	s.cl.options.StrictOrdering = true
+
+	// Produce N messages for consumption into the test partition and hopefully this
+	// doesn't end up being the really slow part of the operation
+	msgs := make([]string, 0, c.N)
+	for i := 0; i < c.N; i++ {
+		msgs = append(msgs, "message")
+	}
+	s.Produce("test16", 0, msgs...)
+
+	// Now consume everything and immediately commit it
+	for i := 0; i < c.N; i++ {
+		if msg := s.consumeOne(c); msg != nil {
+			s.cl.Commit(msg)
+		}
 	}
 }
 
