@@ -28,7 +28,7 @@ func (s *ClaimSuite) SetUpTest(c *C) {
 	s.m, err = NewMarshaler("cl", "gr", []string{s.s.Addr()})
 	c.Assert(err, IsNil)
 
-	s.cl = newClaim("test16", 0, s.m, s.ch)
+	s.cl = newClaim("test16", 0, s.m, s.ch, NewConsumerOptions())
 }
 
 func (s *ClaimSuite) TearDownTest(c *C) {
@@ -59,7 +59,7 @@ func (s *ClaimSuite) consumeOne(c *C) *proto.Message {
 	select {
 	case msg := <-s.ch:
 		return msg
-	case <-time.After(1 * time.Second):
+	case <-time.After(3 * time.Second):
 		c.Error("Timed out consuming a message.")
 	}
 	return nil
@@ -77,9 +77,6 @@ func (s *ClaimSuite) TestCommit(c *C) {
 
 	// Consume 1, heartbeat... offsets still 0
 	msg1 := s.consumeOne(c)
-	s.cl.lock.RLock()
-	c.Assert(len(s.cl.tracking), Equals, 6)
-	s.cl.lock.RUnlock()
 	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
@@ -133,6 +130,43 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(len(s.cl.tracking), Equals, 0)
 }
 
+func (s *ClaimSuite) TestOrderedConsume(c *C) {
+	// Turn on ordered consumption
+	s.cl.options.StrictOrdering = true
+	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3", "m4", "m5", "m6"), Equals, int64(5))
+	c.Assert(s.cl.updateOffsets(0), IsNil)
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	c.Assert(s.cl.offsets.Earliest, Equals, int64(0))
+	c.Assert(s.cl.offsets.Latest, Equals, int64(6))
+
+	// Consume 1, heartbeat... offsets still 0
+	msg1 := s.consumeOne(c)
+	s.cl.lock.RLock()
+	c.Assert(len(s.cl.tracking), Equals, 1) // Only one, since ordering.
+	s.cl.lock.RUnlock()
+	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	c.Assert(s.cl.tracking[0], Equals, false)
+
+	// Attempt to consume a message, but we expect it to fail (i.e. no message to be
+	// available)
+	select {
+	case <-s.ch:
+		c.Error("Expected no message, but message was returned")
+	case <-time.After(300 * time.Millisecond):
+		// Good.
+	}
+
+	// Now commit, and then try to consume again, it should work
+	c.Assert(s.cl.Commit(msg1), IsNil)
+	msg2 := s.consumeOne(c)
+	c.Assert(msg2.Value, DeepEquals, []byte("m2"))
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+}
+
 func (s *ClaimSuite) BenchmarkConsumeAndCommit(c *C) {
 	// Produce N messages for consumption into the test partition and hopefully this
 	// doesn't end up being the really slow part of the operation
@@ -144,8 +178,29 @@ func (s *ClaimSuite) BenchmarkConsumeAndCommit(c *C) {
 
 	// Now consume everything and immediately commit it
 	for i := 0; i < c.N; i++ {
-		msg := s.consumeOne(c)
-		s.cl.Commit(msg)
+		if msg := s.consumeOne(c); msg != nil {
+			s.cl.Commit(msg)
+		}
+	}
+}
+
+func (s *ClaimSuite) BenchmarkOrderedConsumeAndCommit(c *C) {
+	// Turn on ordering to slow everything down...
+	s.cl.options.StrictOrdering = true
+
+	// Produce N messages for consumption into the test partition and hopefully this
+	// doesn't end up being the really slow part of the operation
+	msgs := make([]string, 0, c.N)
+	for i := 0; i < c.N; i++ {
+		msgs = append(msgs, "message")
+	}
+	s.Produce("test16", 0, msgs...)
+
+	// Now consume everything and immediately commit it
+	for i := 0; i < c.N; i++ {
+		if msg := s.consumeOne(c); msg != nil {
+			s.cl.Commit(msg)
+		}
 	}
 }
 

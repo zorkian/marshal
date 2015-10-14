@@ -33,6 +33,12 @@ type ConsumerOptions struct {
 	// partitions on start. This is appropriate in low QPS type environments.
 	// Defaults to false/off.
 	GreedyClaims bool
+
+	// StrictOrdering tells the consumer that only a single message per partition
+	// is allowed to be in-flight at a time. In order to consume the next message
+	// you must commit the existing message. This option has a strong penalty to
+	// consumption parallelism.
+	StrictOrdering bool
 }
 
 // Consumer allows you to safely consume data from a given topic in such a way that you
@@ -87,7 +93,7 @@ func NewConsumer(marshal *Marshaler, topicName string,
 				// and our heartbeat will happen shortly from the automatic health
 				// check which fires up immediately on newClaim.
 				log.Infof("%s:%d attempting to fast-reclaim", c.topic, partID)
-				c.claims[partID] = newClaim(c.topic, partID, c.marshal, c.messages)
+				c.claims[partID] = newClaim(c.topic, partID, c.marshal, c.messages, options)
 			}
 		}
 	}
@@ -99,8 +105,9 @@ func NewConsumer(marshal *Marshaler, topicName string,
 // NewConsumerOptions returns a default set of options for the Consumer.
 func NewConsumerOptions() ConsumerOptions {
 	return ConsumerOptions{
-		FastReclaim:  true,
-		GreedyClaims: false,
+		FastReclaim:    true,
+		GreedyClaims:   false,
+		StrictOrdering: false,
 	}
 }
 
@@ -117,7 +124,7 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 
 	// Set up internal claim structure we'll track things in, this can block for a while
 	// as it talks to Kafka and waits for rationalizers.
-	newclaim := newClaim(c.topic, partID, c.marshal, c.messages)
+	newclaim := newClaim(c.topic, partID, c.marshal, c.messages, c.options)
 	if newclaim == nil {
 		return false
 	}
