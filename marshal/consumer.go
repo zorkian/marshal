@@ -63,18 +63,12 @@ type Consumer struct {
 // NewConsumer instantiates a consumer object for a given topic. You must create a
 // separate consumer for every individual topic that you want to consume from. Please
 // see the documentation on ConsumerBehavior.
-func NewConsumer(marshal *Marshaler, topicName string,
-	options ConsumerOptions) (*Consumer, error) {
-
-	if marshal == nil {
-		return nil, errors.New("Must provide a marshaler")
-	}
-
+func (m *Marshaler) NewConsumer(topicName string, options ConsumerOptions) (*Consumer, error) {
 	c := &Consumer{
 		alive:      new(int32),
-		marshal:    marshal,
+		marshal:    m,
 		topic:      topicName,
-		partitions: marshal.Partitions(topicName),
+		partitions: m.Partitions(topicName),
 		options:    options,
 		messages:   make(chan *proto.Message, 1000),
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),

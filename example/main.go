@@ -33,7 +33,7 @@ func main() {
 	options := marshal.NewConsumerOptions()
 	options.GreedyClaims = true
 
-	consumer, err := marshal.NewConsumer(marshaler, "some-topic", options)
+	consumer, err := marshaler.NewConsumer("some-topic", options)
 	if err != nil {
 		log.Fatalf("Failed to construct consumer: %s", err)
 	}
@@ -45,7 +45,8 @@ func main() {
 	msgChan := consumer.ConsumeChannel()
 
 	// You can spin up many goroutines to process messages; how many depends entirely on the type
-	// of workload you have.
+	// of workload you have. Note that if you turn StrictOrdering on, spinning up multiple
+	// routines may not help as much as you expect. See the docs.
 	for i := 0; i < 10; i++ {
 		i := i
 		go func() {

@@ -63,7 +63,7 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 	options := NewConsumerOptions()
 	options.GreedyClaims = true
 
-	cn, err := NewConsumer(s.m, "test1", options)
+	cn, err := s.m.NewConsumer("test1", options)
 	c.Assert(err, IsNil)
 	defer cn.Terminate()
 
@@ -283,7 +283,7 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// Claim some partitions then create a new consumer with fast reclaim on; this
 	// should "reclaim" the partitions automatically at the offset they were last
 	// reported at
-	cn1, err := NewConsumer(s.m, "test2", NewConsumerOptions())
+	cn1, err := s.m.NewConsumer("test2", NewConsumerOptions())
 	c.Assert(err, IsNil)
 	defer cn1.Terminate()
 	s.Produce("test2", 0, "m1", "m2", "m3")
@@ -310,7 +310,7 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// Now we "reclaim" by creating a new consumer here; this is actually bogus
 	// usage as it would normally lead to stepping on the prior consumer, but it
 	// is useful for this test.
-	cn, err := NewConsumer(s.m, "test2", NewConsumerOptions())
+	cn, err := s.m.NewConsumer("test2", NewConsumerOptions())
 	c.Assert(err, IsNil)
 	defer cn.Terminate()
 
