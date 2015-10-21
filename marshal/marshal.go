@@ -50,16 +50,17 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 	}
 
 	ws := &Marshaler{
-		quit:     new(int32),
-		rsteps:   new(int32),
-		clientID: clientID,
-		groupID:  groupID,
-		kafka:    broker,
-		offsets:  coordinator,
-		producer: broker.Producer(kafka.NewProducerConf()),
-		topics:   make(map[string]int),
-		groups:   make(map[string]map[string]*topicState),
-		jitters:  make(chan time.Duration, 100),
+		quit:       new(int32),
+		rsteps:     new(int32),
+		instanceID: newInstanceID(),
+		clientID:   clientID,
+		groupID:    groupID,
+		kafka:      broker,
+		offsets:    coordinator,
+		producer:   broker.Producer(kafka.NewProducerConf()),
+		topics:     make(map[string]int),
+		groups:     make(map[string]map[string]*topicState),
+		jitters:    make(chan time.Duration, 100),
 	}
 
 	// Do an initial metadata fetch, this will block a bit
