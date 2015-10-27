@@ -217,7 +217,7 @@ func (s *ConsumerSuite) TestCommittedOffset(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(offset, Equals, int64(2))
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
-	c.Assert(s.m.waitForRsteps(5), Equals, 5)
+	c.Assert(s.m.waitForRsteps(6), Equals, 6)
 	c.Assert(s.cn.claims[0].offsets.Current, Equals, int64(3))
 }
 

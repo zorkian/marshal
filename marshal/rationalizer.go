@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jpillora/backoff"
 	"github.com/optiopay/kafka"
 )
 
@@ -21,24 +22,35 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 	log.Debugf("rationalize[%d]: starting", partID)
 	out := make(chan message, 1000)
 	go func() {
-		// Figure out how many messages are in this topic
-		offsetFirst, err := w.kafka.OffsetEarliest(MarshalTopic, int32(partID))
-		if err != nil {
-			log.Fatalf("rationalize[%d]: failed to get offset: %s", partID, err)
-		}
-		offsetNext, err := w.kafka.OffsetLatest(MarshalTopic, int32(partID))
-		if err != nil {
-			log.Fatalf("rationalize[%d]: failed to get offset: %s", partID, err)
-		}
-		log.Debugf("rationalize[%d]: offsets %d to %d", partID, offsetFirst, offsetNext)
+		var err error
+		var alive bool
+		var offsetFirst, offsetNext int64
 
-		// TODO: Is there a case where the latest offset is X>0 but there is no data in
-		// the partition? does the offset reset to 0?
-		alive := false
-		if offsetNext == 0 || offsetFirst == offsetNext {
-			alive = true
-			w.rationalizers.Done()
+		retry := &backoff.Backoff{Min: 500 * time.Millisecond, Jitter: true}
+		for ; true; time.Sleep(retry.Duration()) {
+			// Figure out how many messages are in this topic. This can fail if the broker handling
+			// this partition is down, so we will loop.
+			offsetFirst, err = w.kafka.OffsetEarliest(MarshalTopic, int32(partID))
+			if err != nil {
+				log.Errorf("rationalize[%d]: failed to get offset: %s", partID, err)
+				continue
+			}
+			offsetNext, err = w.kafka.OffsetLatest(MarshalTopic, int32(partID))
+			if err != nil {
+				log.Errorf("rationalize[%d]: failed to get offset: %s", partID, err)
+				continue
+			}
+			log.Debugf("rationalize[%d]: offsets %d to %d", partID, offsetFirst, offsetNext)
+
+			// TODO: Is there a case where the latest offset is X>0 but there is no data in
+			// the partition? does the offset reset to 0?
+			if offsetNext == 0 || offsetFirst == offsetNext {
+				alive = true
+				w.rationalizers.Done()
+			}
+			break
 		}
+		retry.Reset()
 
 		// TODO: Technically we don't have to start at the beginning, we just need to start back
 		// a couple heartbeat intervals to get a full state of the world. But this is easiest
@@ -66,9 +78,13 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 			msgb, err := consumer.Consume()
 			if err != nil {
 				// The internal consumer will do a number of retries. If we get an error here,
-				// for now let's consider it fatal.
-				log.Fatalf("rationalize[%d]: failed to consume: %s", partID, err)
+				// we're probably in the middle of a partition handoff. We should pause so we
+				// don't hammer the cluster, but otherwise continue.
+				log.Warningf("rationalize[%d]: failed to consume: %s", partID, err)
+				time.Sleep(retry.Duration())
+				continue
 			}
+			retry.Reset()
 
 			msg, err := decode(msgb.Value)
 			if err != nil {
