@@ -32,7 +32,7 @@ func (s *RationalizerSuite) SetUpTest(c *C) {
 	// Build our return channel and insert it (simulating what the marshal does for
 	// actually trying to claim)
 	s.ret = make(chan bool, 1)
-	topic := s.m.getTopicState("test1", 0)
+	topic := s.m.getTopicState(s.m.groupID, "test1", 0)
 	topic.lock.Lock()
 	topic.partitions[0].pendingClaims = append(topic.partitions[0].pendingClaims, s.ret)
 	topic.lock.Unlock()
@@ -125,13 +125,32 @@ func (s *RationalizerSuite) TestClaimNotMutable(c *C) {
 	// They heartbeated at 1, should be claimed as of 1.
 	s.m.ts = 1
 	cl := s.m.GetPartitionClaim("test1", 0)
-	c.Assert(cl.LastHeartbeat, Not(Equals), 0)
+	c.Assert(cl.LastHeartbeat, Not(Equals), int64(0))
 
 	// Modify structure, then refetch and make sure it hasn't been mutated
 	cl.ClientID = "invalid"
 	cl2 := s.m.GetPartitionClaim("test1", 0)
-	c.Assert(cl2.LastHeartbeat, Not(Equals), 0)
+	c.Assert(cl2.LastHeartbeat, Not(Equals), int64(0))
 	c.Assert(cl2.ClientID, Equals, "cl")
+}
+
+func (s *RationalizerSuite) TestClaimNotOurs(c *C) {
+	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
+	// by the client/group given.
+	s.out <- heartbeat(1, "cl", "grother", "test1", 0, 0)
+	c.Assert(s.m.waitForRsteps(1), Equals, 1)
+
+	// They heartbeated at 1, but since we have a different groupID, this should say that
+	// the partition is not claimed
+	s.m.ts = 1
+	cl := s.m.GetPartitionClaim("test1", 0)
+	c.Assert(cl.LastHeartbeat, Equals, int64(0))
+
+	// Now change our marshal's group to match
+	s.m.groupID = "grother"
+	s.m.ts = 1
+	cl = s.m.GetPartitionClaim("test1", 0)
+	c.Assert(cl.LastHeartbeat, Not(Equals), int64(0))
 }
 
 func (s *RationalizerSuite) TestClaimPartition(c *C) {

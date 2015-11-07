@@ -70,7 +70,7 @@ func (m *Marshaler) NewConsumer(topicName string, options ConsumerOptions) (*Con
 		topic:      topicName,
 		partitions: m.Partitions(topicName),
 		options:    options,
-		messages:   make(chan *proto.Message, 1000),
+		messages:   make(chan *proto.Message, 10000),
 		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
 		claims:     make(map[int]*claim),
 	}
