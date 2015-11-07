@@ -119,7 +119,7 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 
 // updateClaim is called whenever we need to adjust a claim structure.
 func (w *Marshaler) updateClaim(msg *msgHeartbeat) {
-	topic := w.getTopicState(msg.Topic, msg.PartID)
+	topic := w.getTopicState(msg.GroupID, msg.Topic, msg.PartID)
 
 	topic.lock.Lock()
 	defer topic.lock.Unlock()
@@ -135,7 +135,7 @@ func (w *Marshaler) updateClaim(msg *msgHeartbeat) {
 
 // releaseClaim is called whenever someone has released their claim on a partition.
 func (w *Marshaler) releaseClaim(msg *msgReleasingPartition) {
-	topic := w.getTopicState(msg.Topic, msg.PartID)
+	topic := w.getTopicState(msg.GroupID, msg.Topic, msg.PartID)
 
 	topic.lock.Lock()
 	defer topic.lock.Unlock()
@@ -155,7 +155,7 @@ func (w *Marshaler) releaseClaim(msg *msgReleasingPartition) {
 
 // handleClaim is called whenever we see a ClaimPartition message.
 func (w *Marshaler) handleClaim(msg *msgClaimingPartition) {
-	topic := w.getTopicState(msg.Topic, msg.PartID)
+	topic := w.getTopicState(msg.GroupID, msg.Topic, msg.PartID)
 
 	topic.lock.Lock()
 	defer topic.lock.Unlock()

@@ -109,14 +109,14 @@ func (m *Marshaler) getClaimPartition(topicName string) int {
 
 // getTopicState returns a topicState and possibly creates it and the partition state within
 // the State.
-func (m *Marshaler) getTopicState(topicName string, partID int) *topicState {
+func (m *Marshaler) getTopicState(groupID, topicName string, partID int) *topicState {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	group, ok := m.groups[m.groupID]
+	group, ok := m.groups[groupID]
 	if !ok {
 		group = make(map[string]*topicState)
-		m.groups[m.groupID] = group
+		m.groups[groupID] = group
 	}
 
 	topic, ok := group[topicName]
@@ -184,7 +184,7 @@ func (m *Marshaler) IsClaimed(topicName string, partID int) bool {
 // describes the consumer that is currently claiming this partition. This is a copy of the
 // claim structure, so changing it cannot change the world state.
 func (m *Marshaler) GetPartitionClaim(topicName string, partID int) PartitionClaim {
-	topic := m.getTopicState(topicName, partID)
+	topic := m.getTopicState(m.groupID, topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
@@ -199,7 +199,7 @@ func (m *Marshaler) GetPartitionClaim(topicName string, partID int) PartitionCla
 // describes the consumer that is currently or most recently claiming this partition. This is a
 // copy of the claim structure, so changing it cannot change the world state.
 func (m *Marshaler) GetLastPartitionClaim(topicName string, partID int) PartitionClaim {
-	topic := m.getTopicState(topicName, partID)
+	topic := m.getTopicState(m.groupID, topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
@@ -244,7 +244,7 @@ func (m *Marshaler) GetPartitionOffsets(topicName string, partID int) (Partition
 // want to use a MarshaledConsumer. Returns a bool on whether or not the claim succeeded and
 // whether you can continue.
 func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
-	topic := m.getTopicState(topicName, partID)
+	topic := m.getTopicState(m.groupID, topicName, partID)
 
 	// Unlock is later, since this function might take a while
 	// TODO: Move this logic to a func and defer the lock (for sanity sake)
@@ -297,7 +297,7 @@ func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
 // still owning this partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
 func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) error {
-	topic := m.getTopicState(topicName, partID)
+	topic := m.getTopicState(m.groupID, topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
@@ -346,7 +346,7 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 // a partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
 func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset int64) error {
-	topic := m.getTopicState(topicName, partID)
+	topic := m.getTopicState(m.groupID, topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
