@@ -290,6 +290,11 @@ func (s *ClaimSuite) TestVelocity(c *C) {
 	c.Assert(s.cl.ConsumerVelocity(), Equals, float64(5))
 	s.cl.offsetLatestHistory = s.cl.offsetCurrentHistory
 	c.Assert(s.cl.PartitionVelocity(), Equals, s.cl.ConsumerVelocity())
+
+	s.cl.offsetCurrentHistory = [10]int64{21, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	c.Assert(s.cl.ConsumerVelocity(), Equals, float64(0))
+	s.cl.offsetLatestHistory = s.cl.offsetCurrentHistory
+	c.Assert(s.cl.PartitionVelocity(), Equals, s.cl.ConsumerVelocity())
 }
 
 func (s *ClaimSuite) TestHealthCheck(c *C) {

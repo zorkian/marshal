@@ -382,6 +382,10 @@ func (c *claim) healthCheck() bool {
 
 	// If velocity is good, reset cycles behind and exit
 	if partitionVelocity <= consumerVelocity {
+		if c.cyclesBehind != 0 {
+			log.Warningf("%s:%d  catching up: (resetting warning) CV %0.2f < PV %0.2f (warning #%d)",
+				c.topic, c.partID, consumerVelocity, partitionVelocity, c.cyclesBehind)
+		}
 		c.cyclesBehind = 0
 		return true
 	}
@@ -435,9 +439,11 @@ func average(vals []int64) float64 {
 		}
 		ct++
 	}
-	if ct == 0 {
+
+	if min == max || ct < 2 {
 		return 0
 	}
+
 	return float64(max-min) / float64(ct-1)
 }
 
