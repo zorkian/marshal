@@ -382,7 +382,7 @@ func (c *claim) healthCheck() bool {
 
 	// If velocity is good, reset cycles behind and exit
 	if partitionVelocity <= consumerVelocity {
-		if(c.cyclesBehind != 0) {
+		if c.cyclesBehind != 0 {
 			log.Warningf("%s:%d  catching up: (resetting warning) CV %0.2f < PV %0.2f (warning #%d)",
 				c.topic, c.partID, consumerVelocity, partitionVelocity, c.cyclesBehind)
 		}
@@ -397,7 +397,7 @@ func (c *claim) healthCheck() bool {
 	// If were behind by too many cycles, then we should try to release the
 	// partition. If so, do this in a goroutine since it will involve calling out
 	// to Kafka and releasing the partition.
-	if c.cyclesBehind >= 5 {
+	if c.cyclesBehind >= 3 {
 		log.Warningf("%s:%d consumer unhealthy, releasing",
 			c.topic, c.partID)
 		go c.Release()
