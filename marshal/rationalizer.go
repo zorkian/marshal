@@ -95,6 +95,13 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 				// be doing things we don't anticipate. Of course, crashing all consumers
 				// reading that partition is also bad.
 				log.Errorf("rationalize[%d]: %s", partID, err)
+
+				// In the case where the first message is an invalid message, we need to
+				// to notify that we're alive now
+				if !alive {
+					alive = true
+					w.rationalizers.Done()
+				}
 				continue
 			}
 
