@@ -37,7 +37,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to construct consumer: %s", err)
 	}
-	defer consumer.Terminate()
+	defer consumer.Terminate(true)
 
 	// Now we can get the consumption channel. Messages will be available in this channel
 	// and you can consume from it in many different goroutines if your message processing
