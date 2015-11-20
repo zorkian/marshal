@@ -157,6 +157,10 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 // set on aggressive, this will try to claim ALL partitions that are free. Balanced mode
 // will claim a single partition.
 func (c *Consumer) claimPartitions() {
+	if c.partitions <= 0 {
+		return
+	}
+
 	offset := rand.Intn(c.partitions)
 	for i := 0; i < c.partitions; i++ {
 		partID := (i + offset) % c.partitions
