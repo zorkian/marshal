@@ -44,7 +44,7 @@ func (s *ConsumerSuite) SetUpTest(c *C) {
 }
 
 func (s *ConsumerSuite) TearDownTest(c *C) {
-	s.cn.Terminate()
+	s.cn.Terminate(true)
 	s.m.Terminate()
 	s.s.Close()
 }
@@ -65,7 +65,7 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 
 	cn, err := s.m.NewConsumer("test1", options)
 	c.Assert(err, IsNil)
-	defer cn.Terminate()
+	defer cn.Terminate(true)
 
 	// Wait for 2 messages to be processed
 	c.Assert(s.m.waitForRsteps(2), Equals, 2)
@@ -82,13 +82,22 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 	// lots of things can be tested.
 }
 
-func (s *ConsumerSuite) TestTerminate(c *C) {
+func (s *ConsumerSuite) TestTerminateWithRelease(c *C) {
 	// Termination is supposed to release active claims that we have, ensure that
 	// this happens
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
-	c.Assert(s.cn.Terminate(), Equals, true)
+	c.Assert(s.cn.Terminate(true), Equals, true)
 	c.Assert(s.m.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim(s.cn.topic, 0).LastHeartbeat, Equals, int64(0))
+}
+
+func (s *ConsumerSuite) TestTerminateWithCommit(c *C) {
+	// Termination is supposed to release active claims that we have, ensure that
+	// this happens
+	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	c.Assert(s.cn.Terminate(false), Equals, true)
+	// Shouldn't release the claim
+	c.Assert(s.m.GetPartitionClaim(s.cn.topic, 0).LastHeartbeat, Not(Equals), int64(0))
 }
 
 func (s *ConsumerSuite) TestMultiClaim(c *C) {
@@ -285,7 +294,7 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// reported at
 	cn1, err := s.m.NewConsumer("test2", NewConsumerOptions())
 	c.Assert(err, IsNil)
-	defer cn1.Terminate()
+	defer cn1.Terminate(true)
 	s.Produce("test2", 0, "m1", "m2", "m3")
 
 	// By default the consumer will claim all partitions so let's wait for that
@@ -312,7 +321,7 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// is useful for this test.
 	cn, err := s.m.NewConsumer("test2", NewConsumerOptions())
 	c.Assert(err, IsNil)
-	defer cn.Terminate()
+	defer cn.Terminate(true)
 
 	// We expect the two partitions to be reclaimed with a simple heartbeat
 	// and no claim message sent

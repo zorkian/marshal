@@ -157,6 +157,10 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 // set on aggressive, this will try to claim ALL partitions that are free. Balanced mode
 // will claim a single partition.
 func (c *Consumer) claimPartitions() {
+	if c.partitions <= 0 {
+		return
+	}
+
 	offset := rand.Intn(c.partitions)
 	for i := 0; i < c.partitions; i++ {
 		partID := (i + offset) % c.partitions
@@ -207,10 +211,10 @@ func (c *Consumer) Terminated() bool {
 	return atomic.LoadInt32(c.alive) == 0
 }
 
-// Terminate instructs the consumer to release its locks. This will allow other consumers
-// to begin consuming. (If you do not call this method before exiting, things will still
-// work, but more slowly.)
-func (c *Consumer) Terminate() bool {
+// Terminate instructs the consumer to commit its offsets and possibly release its partitions.
+// This will allow other consumers to begin consuming.
+// (If you do not call this method before exiting, things will still work, but more slowly.)
+func (c *Consumer) Terminate(release bool) bool {
 	if !atomic.CompareAndSwapInt32(c.alive, 1, 0) {
 		return false
 	}
@@ -220,7 +224,11 @@ func (c *Consumer) Terminate() bool {
 
 	for _, claim := range c.claims {
 		if claim != nil {
-			claim.Release()
+			if release {
+				claim.Release()
+			} else {
+				claim.CommitOffsets()
+			}
 		}
 	}
 	return true
