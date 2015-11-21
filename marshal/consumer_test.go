@@ -1,13 +1,12 @@
 package marshal
 
 import (
+	. "gopkg.in/check.v1"
 	"math/rand"
 	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
-
-	. "gopkg.in/check.v1"
 
 	"github.com/optiopay/kafka/kafkatest"
 	"github.com/optiopay/kafka/proto"
@@ -105,18 +104,18 @@ func (s *ConsumerSuite) TestMultiClaim(c *C) {
 	// we get all of the messages out
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
 	c.Assert(s.cn.tryClaimPartition(1), Equals, true)
-
-	// Produce 1000 messages to the two partitions
-	for i := 0; i < 1000; i++ {
+	numMessages := 100
+	// Produce numMessages messages to the two partitions
+	for i := 0; i < numMessages; i++ {
 		s.Produce("test16", i%2, strconv.Itoa(i))
 	}
 
-	// Now consume 1000 times and ensure we get exactly 1000 unique messages
+	// Now consume numMessages times and ensure we get exactly 1000 unique messages
 	results := make(map[string]bool)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < numMessages; i++ {
 		results[string(s.cn.consumeOne().Value)] = true
 	}
-	c.Assert(len(results), Equals, 1000)
+	c.Assert(len(results), Equals, numMessages)
 }
 
 func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {

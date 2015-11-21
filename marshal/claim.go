@@ -255,10 +255,6 @@ func (c *claim) Release() bool {
 // CommitOffsets will commit offsets in the Marshal topic if and only if we are still claimed.
 // CommitOffsets does NOT release the partition
 func (c *claim) CommitOffsets() bool {
-	if !atomic.CompareAndSwapInt32(c.claimed, 1, 0) {
-		return false
-	}
-
 	// Let's update current offset internally to the last processed
 	c.updateCurrentOffsets()
 
@@ -339,6 +335,9 @@ func (c *claim) heartbeat() bool {
 		log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
 		go c.Release()
 	}
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
 	log.Debugf("%s:%d heartbeat: current offset %d with %d uncommitted messages",
 		c.offsets.Current, c.outstandingMessages)
 	c.lastHeartbeat = time.Now().Unix()
@@ -355,7 +354,7 @@ func (c *claim) updateCurrentOffsets() {
 
 	// Get the sorted set of offsets
 	offsets := make(int64slice, 0, len(c.tracking))
-	for key, _ := range c.tracking {
+	for key := range c.tracking {
 		offsets = append(offsets, key)
 	}
 	sort.Sort(offsets)

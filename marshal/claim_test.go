@@ -217,12 +217,10 @@ func (s *ClaimSuite) TestRelease(c *C) {
 func (s *ClaimSuite) TestCommitOffsets(c *C) {
 	// Test that calling Release on a claim properly sets the flag and commits offsets
 	// for the partition
+	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
 	c.Assert(s.cl.Claimed(), Equals, true)
 	c.Assert(s.cl.CommitOffsets(), Equals, true)
-	c.Assert(s.cl.Claimed(), Equals, false)
-	c.Assert(s.m.waitForRsteps(1), Equals, 1)
-	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
-	c.Assert(s.cl.CommitOffsets(), Equals, false)
+	c.Assert(s.cl.Claimed(), Equals, true)
 }
 
 func (s *ClaimSuite) TestCommitOutstanding(c *C) {
