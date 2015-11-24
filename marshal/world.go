@@ -16,9 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"code.google.com/p/go-uuid/uuid"
 	"github.com/optiopay/kafka"
 	"github.com/optiopay/kafka/proto"
+	"github.com/pborman/uuid"
 )
 
 // Marshaler is the coordinator type. It is designed to be used once globally and
