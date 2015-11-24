@@ -224,9 +224,8 @@ func (s *ClaimSuite) TestCommitOffsets(c *C) {
 }
 
 func (s *ClaimSuite) TestCommitOutstanding(c *C) {
-	// Test that calling Commit/Release should commit any outstanding messages
-	// Test the commit message flow, ensuring that our offset only gets updated when
-	// we have properly committed messages
+	// Test that calling CommitOffsets should commit offsets for outstanding messages and
+	// updates claim tracking
 	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3", "m4", "m5", "m6"), Equals, int64(5))
 	c.Assert(s.cl.updateOffsets(0), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
@@ -239,6 +238,8 @@ func (s *ClaimSuite) TestCommitOutstanding(c *C) {
 	c.Assert(s.cl.Commit(msg1), IsNil)
 	c.Assert(len(s.cl.tracking), Equals, 6)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+
+	// Commit the offsets....should update current offset and tracking for the claim
 	c.Assert(s.cl.CommitOffsets(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(len(s.cl.tracking), Equals, 5)
