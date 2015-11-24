@@ -160,7 +160,6 @@ func (m *Marshaler) Topics() []string {
 func (m *Marshaler) Partitions(topicName string) int {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
-
 	count, _ := m.topics[topicName]
 	return count
 }
@@ -297,6 +296,7 @@ func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
 // still owning this partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
 func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) error {
+	// cannot be called within topic.lock.RLock() since it calls topic.lock.Lock()
 	topic := m.getTopicState(m.groupID, topicName, partID)
 
 	topic.lock.RLock()
@@ -330,16 +330,10 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 		return fmt.Errorf("Failed to produce heartbeat to Kafka: %s", err)
 	}
 
-	// Finally, also commit this offset to Kafka so it's available in the long-term storage
-	// of the offset coordination system
-	err = m.offsets.Commit(topicName, int32(partID), lastOffset)
-	if err != nil {
-		// Do not count this as a returned error as that will cause us to drop consumption, but
-		// do log it so people can see it
-		log.Errorf("%s:%d failed to commit offsets: %s", topicName, partID, err)
-	}
-
-	return nil
+	topic.lock.RUnlock()
+	err = m.CommitOffsets(topicName, partID, lastOffset)
+	topic.lock.RLock()
+	return err
 }
 
 // ReleasePartition will send an update for other people to know that we're done with
@@ -379,9 +373,22 @@ func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset in
 		return fmt.Errorf("Failed to produce release to Kafka: %s", err)
 	}
 
-	// Finally, also commit this offset to Kafka so it's available in the long-term storage
-	// of the offset coordination system
-	err = m.offsets.Commit(topicName, int32(partID), lastOffset)
+	topic.lock.RUnlock()
+	err = m.CommitOffsets(topicName, partID, lastOffset)
+	topic.lock.RLock()
+	return err
+}
+
+// CommitOffsets will commit the partition offsets to Kafka so it's available in the
+// long-term storage of the offset coordination system
+func (m *Marshaler) CommitOffsets(topicName string, partID int, lastOffset int64) error {
+	// cannot be called within topic.lock.RLock() since it calls topic.lock.Lock()
+	topic := m.getTopicState(m.groupID, topicName, partID)
+
+	topic.lock.RLock()
+	defer topic.lock.RUnlock()
+
+	err := m.offsets.Commit(topicName, int32(partID), lastOffset)
 	if err != nil {
 		// Do not count this as a returned error as that will cause us to drop consumption, but
 		// do log it so people can see it

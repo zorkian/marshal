@@ -235,6 +235,9 @@ func (c *claim) Release() bool {
 		return false
 	}
 
+	// Let's update current offset internally to the last processed
+	c.updateCurrentOffsets()
+
 	// Holds the lock through a Kafka transaction, but since we're releasing I think this
 	// is reasonable. Held because of using offsetCurrent below.
 	c.lock.RLock()
@@ -244,6 +247,26 @@ func (c *claim) Release() bool {
 	err := c.marshal.ReleasePartition(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
 		log.Errorf("%s:%d failed to release: %s", c.topic, c.partID, err)
+		return false
+	}
+	return true
+}
+
+// CommitOffsets will commit offsets in the Marshal topic if and only if we are still claimed.
+// CommitOffsets does NOT release the partition
+func (c *claim) CommitOffsets() bool {
+	// Let's update current offset internally to the last processed
+	c.updateCurrentOffsets()
+
+	// Holds the lock through a Kafka transaction, but since we're releasing I think this
+	// is reasonable. Held because of using offsetCurrent below.
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	log.Infof("%s:%d releasing partition claim", c.topic, c.partID)
+	err := c.marshal.CommitOffsets(c.topic, c.partID, c.offsets.Current)
+	if err != nil {
+		log.Errorf("%s:%d failed to commit offsets: %s", c.topic, c.partID, err)
 		return false
 	}
 	return true
@@ -303,6 +326,27 @@ func (c *claim) heartbeat() bool {
 		return false
 	}
 
+	// Let's update current offset internally to the last processed
+	c.updateCurrentOffsets()
+
+	// Now heartbeat this value and update our heartbeat time
+	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current)
+	if err != nil {
+		log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
+		go c.Release()
+	}
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	log.Debugf("%s:%d heartbeat: current offset %d with %d uncommitted messages",
+		c.offsets.Current, c.outstandingMessages)
+	c.lastHeartbeat = time.Now().Unix()
+	return true
+}
+
+// updateCurrentOffsets updates the current offsets so that a Commit/Heartbeat can pick up the latest
+// offsets
+func (c *claim) updateCurrentOffsets() {
 	// TODO: This holds a lock around a Kafka transaction do we really want that?
 	// Won't this block consumption pretty hard?
 	c.lock.Lock()
@@ -310,7 +354,7 @@ func (c *claim) heartbeat() bool {
 
 	// Get the sorted set of offsets
 	offsets := make(int64slice, 0, len(c.tracking))
-	for key, _ := range c.tracking {
+	for key := range c.tracking {
 		offsets = append(offsets, key)
 	}
 	sort.Sort(offsets)
@@ -334,17 +378,6 @@ func (c *claim) heartbeat() bool {
 		log.Errorf("%s:%d has %d uncommitted offsets. You must call Commit.",
 			c.topic, c.partID, len(c.tracking))
 	}
-
-	// Now heartbeat this value and update our heartbeat time
-	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current)
-	if err != nil {
-		log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
-		go c.Release()
-	}
-	log.Debugf("%s:%d heartbeat: current offset %d with %d uncommitted messages",
-		c.offsets.Current, c.outstandingMessages)
-	c.lastHeartbeat = time.Now().Unix()
-	return true
 }
 
 // healthCheck performs a single health check against the claim. If we have failed

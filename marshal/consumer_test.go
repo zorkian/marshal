@@ -1,13 +1,12 @@
 package marshal
 
 import (
+	. "gopkg.in/check.v1"
 	"math/rand"
 	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
-
-	. "gopkg.in/check.v1"
 
 	"github.com/optiopay/kafka/kafkatest"
 	"github.com/optiopay/kafka/proto"
@@ -44,7 +43,7 @@ func (s *ConsumerSuite) SetUpTest(c *C) {
 }
 
 func (s *ConsumerSuite) TearDownTest(c *C) {
-	s.cn.Terminate()
+	s.cn.Terminate(true)
 	s.m.Terminate()
 	s.s.Close()
 }
@@ -65,7 +64,7 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 
 	cn, err := s.m.NewConsumer("test1", options)
 	c.Assert(err, IsNil)
-	defer cn.Terminate()
+	defer cn.Terminate(true)
 
 	// Wait for 2 messages to be processed
 	c.Assert(s.m.waitForRsteps(2), Equals, 2)
@@ -82,13 +81,21 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 	// lots of things can be tested.
 }
 
-func (s *ConsumerSuite) TestTerminate(c *C) {
+func (s *ConsumerSuite) TestTerminateWithRelease(c *C) {
 	// Termination is supposed to release active claims that we have, ensure that
 	// this happens
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
-	c.Assert(s.cn.Terminate(), Equals, true)
+	c.Assert(s.cn.Terminate(true), Equals, true)
 	c.Assert(s.m.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim(s.cn.topic, 0).LastHeartbeat, Equals, int64(0))
+}
+
+func (s *ConsumerSuite) TestTerminateWithoutRelease(c *C) {
+	// Termination is supposed to commit the active claims without releasing the partition
+	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
+	c.Assert(s.cn.Terminate(false), Equals, true)
+	// Shouldn't release the claim
+	c.Assert(s.m.GetPartitionClaim(s.cn.topic, 0).LastHeartbeat, Not(Equals), int64(0))
 }
 
 func (s *ConsumerSuite) TestMultiClaim(c *C) {
@@ -96,18 +103,18 @@ func (s *ConsumerSuite) TestMultiClaim(c *C) {
 	// we get all of the messages out
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
 	c.Assert(s.cn.tryClaimPartition(1), Equals, true)
-
-	// Produce 1000 messages to the two partitions
-	for i := 0; i < 1000; i++ {
+	numMessages := 100
+	// Produce numMessages messages to the two partitions
+	for i := 0; i < numMessages; i++ {
 		s.Produce("test16", i%2, strconv.Itoa(i))
 	}
 
-	// Now consume 1000 times and ensure we get exactly 1000 unique messages
+	// Now consume numMessages times and ensure we get exactly 1000 unique messages
 	results := make(map[string]bool)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < numMessages; i++ {
 		results[string(s.cn.consumeOne().Value)] = true
 	}
-	c.Assert(len(results), Equals, 1000)
+	c.Assert(len(results), Equals, numMessages)
 }
 
 func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
@@ -285,7 +292,7 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// reported at
 	cn1, err := s.m.NewConsumer("test2", NewConsumerOptions())
 	c.Assert(err, IsNil)
-	defer cn1.Terminate()
+	defer cn1.Terminate(true)
 	s.Produce("test2", 0, "m1", "m2", "m3")
 
 	// By default the consumer will claim all partitions so let's wait for that
@@ -312,7 +319,7 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// is useful for this test.
 	cn, err := s.m.NewConsumer("test2", NewConsumerOptions())
 	c.Assert(err, IsNil)
-	defer cn.Terminate()
+	defer cn.Terminate(true)
 
 	// We expect the two partitions to be reclaimed with a simple heartbeat
 	// and no claim message sent

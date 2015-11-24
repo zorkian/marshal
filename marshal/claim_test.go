@@ -23,11 +23,9 @@ func (s *ClaimSuite) SetUpTest(c *C) {
 	s.c = c
 	s.s = StartServer()
 	s.ch = make(chan *proto.Message, 10)
-
 	var err error
 	s.m, err = NewMarshaler("cl", "gr", []string{s.s.Addr()})
 	c.Assert(err, IsNil)
-
 	s.cl = newClaim("test16", 0, s.m, s.ch, NewConsumerOptions())
 }
 
@@ -214,6 +212,37 @@ func (s *ClaimSuite) TestRelease(c *C) {
 	c.Assert(s.m.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
 	c.Assert(s.cl.Release(), Equals, false)
+}
+
+func (s *ClaimSuite) TestCommitOffsets(c *C) {
+	// Test that calling Release on a claim properly sets the flag and commits offsets
+	// for the partition
+	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
+	c.Assert(s.cl.Claimed(), Equals, true)
+	c.Assert(s.cl.CommitOffsets(), Equals, true)
+	c.Assert(s.cl.Claimed(), Equals, true)
+}
+
+func (s *ClaimSuite) TestCommitOutstanding(c *C) {
+	// Test that calling CommitOffsets should commit offsets for outstanding messages and
+	// updates claim tracking
+	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3", "m4", "m5", "m6"), Equals, int64(5))
+	c.Assert(s.cl.updateOffsets(0), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	c.Assert(s.cl.offsets.Earliest, Equals, int64(0))
+	c.Assert(s.cl.offsets.Latest, Equals, int64(6))
+
+	// Consume 1, heartbeat... offsets still 0
+	msg1 := s.consumeOne(c)
+	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
+	c.Assert(s.cl.Commit(msg1), IsNil)
+	c.Assert(len(s.cl.tracking), Equals, 6)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+
+	// Commit the offsets....should update current offset and tracking for the claim
+	c.Assert(s.cl.CommitOffsets(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(len(s.cl.tracking), Equals, 5)
 }
 
 func (s *ClaimSuite) TestCurrentLag(c *C) {
