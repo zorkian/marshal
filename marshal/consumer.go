@@ -283,7 +283,7 @@ func (c *Consumer) GetCurrentLoad() int {
 	return c.GetNumActiveClaims()
 }
 
-// Returns the number of claims actively owned by this Consumer.
+// GetNumActiveClaims returns the number of claims actively owned by this Consumer.
 func (c *Consumer) GetNumActiveClaims() (ct int) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
@@ -296,7 +296,7 @@ func (c *Consumer) GetNumActiveClaims() (ct int) {
 	return
 }
 
-// Returns the number of claims actively owned by this Consumer.
+// IsClaimLimtReached returns the number of claims actively owned by this Consumer.
 func (c *Consumer) IsClaimLimtReached() bool {
 	return c.options.MaximumClaims > 0 && c.GetNumActiveClaims() >= c.options.MaximumClaims
 }
