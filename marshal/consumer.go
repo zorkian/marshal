@@ -123,7 +123,7 @@ func NewConsumerOptions() ConsumerOptions {
 // false. Returns true only if the partition was never claimed and we succeeded in
 // claiming it.
 func (c *Consumer) tryClaimPartition(partID int) bool {
-	if c.IsClaimLimtReached() {
+	if c.isClaimLimtReached() {
 		return false
 	}
 
@@ -181,7 +181,7 @@ func (c *Consumer) claimPartitions() {
 	// Don't bother trying to make claims if we are at our claim limit.
 	// This is just an optimization, because we aren't holding the lock here
 	// this check is repeated inside tryClaimPartition.
-	if c.IsClaimLimtReached() {
+	if c.isClaimLimtReached() {
 		return
 	}
 
@@ -280,11 +280,11 @@ func (c *Consumer) GetCurrentLag() int64 {
 // like a load average in Unix systems: the numbers are kind of related to how much work
 // the system is doing, but by itself they don't tell you much.
 func (c *Consumer) GetCurrentLoad() int {
-	return c.GetNumActiveClaims()
+	return c.getNumActiveClaims()
 }
 
-// GetNumActiveClaims returns the number of claims actively owned by this Consumer.
-func (c *Consumer) GetNumActiveClaims() (ct int) {
+// getNumActiveClaims returns the number of claims actively owned by this Consumer.
+func (c *Consumer) getNumActiveClaims() (ct int) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
@@ -296,9 +296,9 @@ func (c *Consumer) GetNumActiveClaims() (ct int) {
 	return
 }
 
-// IsClaimLimtReached returns the number of claims actively owned by this Consumer.
-func (c *Consumer) IsClaimLimtReached() bool {
-	return c.options.MaximumClaims > 0 && c.GetNumActiveClaims() >= c.options.MaximumClaims
+// isClaimLimtReached returns the number of claims actively owned by this Consumer.
+func (c *Consumer) isClaimLimtReached() bool {
+	return c.options.MaximumClaims > 0 && c.getNumActiveClaims() >= c.options.MaximumClaims
 }
 
 // ConsumeChannel returns a read-only channel. Messages that are retrieved from Kafka will be
