@@ -91,7 +91,7 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
-	c.Assert(len(s.cl.tracking), Equals, 5)
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
 
 	// Consume 3, heartbeat, offset 1
 	msg3 := s.consumeOne(c)
@@ -105,14 +105,14 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
-	c.Assert(len(s.cl.tracking), Equals, 5)
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
 
 	// Commit #2, offset now advances to 3
 	c.Assert(s.cl.Commit(msg2), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(3))
-	c.Assert(len(s.cl.tracking), Equals, 3)
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 3)
 
 	// Attempt to commit invalid offset (never seen), make sure it errors
 	msg3.Offset = 95
@@ -125,7 +125,7 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(s.cl.offsets.Current, Equals, int64(3))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(6))
-	c.Assert(len(s.cl.tracking), Equals, 0)
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 0)
 }
 
 func (s *ClaimSuite) TestOrderedConsume(c *C) {
@@ -141,7 +141,7 @@ func (s *ClaimSuite) TestOrderedConsume(c *C) {
 	// Consume 1, heartbeat... offsets still 0
 	msg1 := s.consumeOne(c)
 	s.cl.lock.RLock()
-	c.Assert(len(s.cl.tracking), Equals, 1) // Only one, since ordering.
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 1) // Only one, since ordering.
 	s.cl.lock.RUnlock()
 	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
 	c.Assert(s.cl.heartbeat(), Equals, true)
@@ -236,13 +236,13 @@ func (s *ClaimSuite) TestCommitOutstanding(c *C) {
 	msg1 := s.consumeOne(c)
 	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
 	c.Assert(s.cl.Commit(msg1), IsNil)
-	c.Assert(len(s.cl.tracking), Equals, 6)
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 6)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 
 	// Commit the offsets....should update current offset and tracking for the claim
 	c.Assert(s.cl.CommitOffsets(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
-	c.Assert(len(s.cl.tracking), Equals, 5)
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
 }
 
 func (s *ClaimSuite) TestCurrentLag(c *C) {

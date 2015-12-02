@@ -520,3 +520,11 @@ func (c *claim) updateOffsets(ctr int) error {
 
 	return nil
 }
+
+// numTrackingOffsets returns the size of the tracking dict.
+func (c *claim) numTrackingOffsets() int {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	return len(c.tracking)
+}
