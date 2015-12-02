@@ -344,31 +344,31 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 }
 
 func (s *ConsumerSuite) TestMaximumClaims(c *C) {
-	// Ensure aggressive mode claims all partitions in a single call to claim
+	// Test the MaximumClaims option.
 	s.cn.options.MaximumClaims = 2
-	c.Assert(s.cn.isClaimLimtReached(), Equals, false)
+	c.Assert(s.cn.isClaimLimitReached(), Equals, false)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 0)
 	s.cn.claimPartitions()
-	c.Assert(s.cn.isClaimLimtReached(), Equals, false)
+	c.Assert(s.cn.isClaimLimitReached(), Equals, false)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 1)
 	s.cn.claimPartitions()
-	c.Assert(s.cn.isClaimLimtReached(), Equals, true)
+	c.Assert(s.cn.isClaimLimitReached(), Equals, true)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
 	s.cn.claimPartitions()
-	c.Assert(s.cn.isClaimLimtReached(), Equals, true)
+	c.Assert(s.cn.isClaimLimitReached(), Equals, true)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
 }
 
 func (s *ConsumerSuite) TestMaximumGreedyClaims(c *C) {
-	// Ensure aggressive mode claims all partitions in a single call to claim
+	// Test the MaximumClaims option combined with GreedyClaims.
 	s.cn.options.MaximumClaims = 2
 	s.cn.options.GreedyClaims = true
-	c.Assert(s.cn.isClaimLimtReached(), Equals, false)
+	c.Assert(s.cn.isClaimLimitReached(), Equals, false)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 0)
 	s.cn.claimPartitions()
-	c.Assert(s.cn.isClaimLimtReached(), Equals, true)
+	c.Assert(s.cn.isClaimLimitReached(), Equals, true)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
 	s.cn.claimPartitions()
-	c.Assert(s.cn.isClaimLimtReached(), Equals, true)
+	c.Assert(s.cn.isClaimLimitReached(), Equals, true)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
 }

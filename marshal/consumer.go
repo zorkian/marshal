@@ -123,7 +123,7 @@ func NewConsumerOptions() ConsumerOptions {
 // false. Returns true only if the partition was never claimed and we succeeded in
 // claiming it.
 func (c *Consumer) tryClaimPartition(partID int) bool {
-	if c.isClaimLimtReached() {
+	if c.isClaimLimitReached() {
 		return false
 	}
 
@@ -181,7 +181,7 @@ func (c *Consumer) claimPartitions() {
 	// Don't bother trying to make claims if we are at our claim limit.
 	// This is just an optimization, because we aren't holding the lock here
 	// this check is repeated inside tryClaimPartition.
-	if c.isClaimLimtReached() {
+	if c.isClaimLimitReached() {
 		return
 	}
 
@@ -296,8 +296,8 @@ func (c *Consumer) getNumActiveClaims() (ct int) {
 	return
 }
 
-// isClaimLimtReached returns the number of claims actively owned by this Consumer.
-func (c *Consumer) isClaimLimtReached() bool {
+// isClaimLimitReached returns the number of claims actively owned by this Consumer.
+func (c *Consumer) isClaimLimitReached() bool {
 	return c.options.MaximumClaims > 0 && c.getNumActiveClaims() >= c.options.MaximumClaims
 }
 
