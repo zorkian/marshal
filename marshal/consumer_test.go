@@ -18,7 +18,23 @@ type ConsumerSuite struct {
 	c  *C
 	s  *kafkatest.Server
 	m  *Marshaler
+	m2 *Marshaler
 	cn *Consumer
+}
+
+func (s *ConsumerSuite) NewTestConsumer(m *Marshaler, topic string) *Consumer {
+	cn := &Consumer{
+		alive:      new(int32),
+		marshal:    m,
+		topic:      topic,
+		partitions: m.Partitions(topic),
+		options:    NewConsumerOptions(),
+		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		claims:     make(map[int]*claim),
+		messages:   make(chan *proto.Message, 1000),
+	}
+	atomic.StoreInt32(cn.alive, 1)
+	return cn
 }
 
 func (s *ConsumerSuite) SetUpTest(c *C) {
@@ -28,18 +44,10 @@ func (s *ConsumerSuite) SetUpTest(c *C) {
 	var err error
 	s.m, err = NewMarshaler("cl", "gr", []string{s.s.Addr()})
 	c.Assert(err, IsNil)
+	s.m2, err = NewMarshaler("cl2", "gr", []string{s.s.Addr()})
+	c.Assert(err, IsNil)
 
-	s.cn = &Consumer{
-		alive:      new(int32),
-		marshal:    s.m,
-		topic:      "test16",
-		partitions: s.m.Partitions("test16"),
-		options:    NewConsumerOptions(),
-		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		claims:     make(map[int]*claim),
-		messages:   make(chan *proto.Message, 1000),
-	}
-	atomic.StoreInt32(s.cn.alive, 1)
+	s.cn = s.NewTestConsumer(s.m, "test16")
 }
 
 func (s *ConsumerSuite) TearDownTest(c *C) {
@@ -115,6 +123,90 @@ func (s *ConsumerSuite) TestMultiClaim(c *C) {
 		results[string(s.cn.consumeOne().Value)] = true
 	}
 	c.Assert(len(results), Equals, numMessages)
+}
+
+func (s *ConsumerSuite) TestTopicClaim(c *C) {
+	// Claim an entire topic
+	options := NewConsumerOptions()
+	options.ClaimEntireTopic = true
+	cn, err := s.m.NewConsumer("test2", options)
+	c.Assert(err, IsNil)
+	defer cn.Terminate(true)
+
+	// Wait for 4 messages to be processed and ensure we have the entire topic
+	c.Assert(s.m.waitForRsteps(4), Equals, 4)
+	c.Assert(s.m.GetPartitionClaim("test2", 0).LastHeartbeat, Not(Equals), int64(0))
+	c.Assert(s.m.GetPartitionClaim("test2", 1).LastHeartbeat, Not(Equals), int64(0))
+}
+
+func (s *ConsumerSuite) TestTopicClaimBlocked(c *C) {
+	// Claim partition 0 with one consumer
+	cnbl := s.NewTestConsumer(s.m, "test2")
+	c.Assert(cnbl.tryClaimPartition(0), Equals, true)
+	c.Assert(s.m.waitForRsteps(2), Equals, 2)
+	c.Assert(s.m2.waitForRsteps(2), Equals, 2)
+
+	// Claim an entire topic, this creates a real consumer
+	cn := s.NewTestConsumer(s.m2, "test2")
+	cn.options.ClaimEntireTopic = true
+	defer cn.Terminate(true)
+
+	// Force our consumer to run it's topic claim loop so we know it has run
+	cn.claimTopic()
+
+	// Ensure partition 1 is unclaimed still and that our new consumer has no claims
+	c.Assert(s.m.GetPartitionClaim("test2", 1).LastHeartbeat, Equals, int64(0))
+	c.Assert(cnbl.getNumActiveClaims(), Equals, 1)
+	c.Assert(cn.getNumActiveClaims(), Equals, 0)
+
+	// Now release partition 0
+	cnbl.Terminate(true)
+	c.Assert(s.m.waitForRsteps(3), Equals, 3)
+	c.Assert(s.m2.waitForRsteps(3), Equals, 3)
+	c.Assert(cnbl.getNumActiveClaims(), Equals, 0)
+	c.Assert(cn.getNumActiveClaims(), Equals, 0)
+
+	// Reclaim and assert we get two claims
+	cn.claimTopic()
+	c.Assert(cnbl.getNumActiveClaims(), Equals, 0)
+	c.Assert(cn.getNumActiveClaims(), Equals, 2)
+}
+
+func (s *ConsumerSuite) TestTopicClaimPartial(c *C) {
+	// Claim partition 1 with one consumer
+	cnbl := s.NewTestConsumer(s.m, "test2")
+	c.Assert(cnbl.tryClaimPartition(1), Equals, true)
+	c.Assert(s.m.waitForRsteps(2), Equals, 2)
+	c.Assert(s.m2.waitForRsteps(2), Equals, 2)
+
+	// Claim an entire topic, this creates a real consumer
+	cn := s.NewTestConsumer(s.m2, "test2")
+	cn.options.ClaimEntireTopic = true
+	defer cn.Terminate(true)
+
+	// Force our consumer to run it's topic claim loop so we know it has run
+	cn.claimTopic()
+
+	// Both should have 1 partition -- the topic claim got 0, and the other one still has 1.
+	// This can happen in the case where a consumer has died and partition 0's claim expires
+	// before the other partitions.
+	c.Assert(cnbl.getNumActiveClaims(), Equals, 1)
+	c.Assert(cn.getNumActiveClaims(), Equals, 1)
+
+	// Now release partition 1, end state should be that the topic claimant still has 0 and
+	// nobody has 1
+	cnbl.Terminate(true)
+	c.Assert(s.m.waitForRsteps(5), Equals, 5)
+	c.Assert(s.m2.waitForRsteps(5), Equals, 5)
+	c.Assert(cnbl.getNumActiveClaims(), Equals, 0)
+	c.Assert(cn.getNumActiveClaims(), Equals, 1)
+
+	// Now the topic claimant runs again and will see it can claim partition 1 and does
+	cn.claimTopic()
+	c.Assert(s.m.waitForRsteps(7), Equals, 7)
+	c.Assert(s.m2.waitForRsteps(7), Equals, 7)
+	c.Assert(cnbl.getNumActiveClaims(), Equals, 0)
+	c.Assert(cn.getNumActiveClaims(), Equals, 2)
 }
 
 func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
