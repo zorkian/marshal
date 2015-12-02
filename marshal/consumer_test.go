@@ -342,3 +342,33 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	sort.Strings(msgs)
 	c.Assert(msgs, DeepEquals, []string{"m3", "p1", "p2", "p3"})
 }
+
+func (s *ConsumerSuite) TestMaximumClaims(c *C) {
+	// Test the MaximumClaims option.
+	s.cn.options.MaximumClaims = 2
+	c.Assert(s.cn.isClaimLimitReached(), Equals, false)
+	c.Assert(s.cn.getNumActiveClaims(), Equals, 0)
+	s.cn.claimPartitions()
+	c.Assert(s.cn.isClaimLimitReached(), Equals, false)
+	c.Assert(s.cn.getNumActiveClaims(), Equals, 1)
+	s.cn.claimPartitions()
+	c.Assert(s.cn.isClaimLimitReached(), Equals, true)
+	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
+	s.cn.claimPartitions()
+	c.Assert(s.cn.isClaimLimitReached(), Equals, true)
+	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
+}
+
+func (s *ConsumerSuite) TestMaximumGreedyClaims(c *C) {
+	// Test the MaximumClaims option combined with GreedyClaims.
+	s.cn.options.MaximumClaims = 2
+	s.cn.options.GreedyClaims = true
+	c.Assert(s.cn.isClaimLimitReached(), Equals, false)
+	c.Assert(s.cn.getNumActiveClaims(), Equals, 0)
+	s.cn.claimPartitions()
+	c.Assert(s.cn.isClaimLimitReached(), Equals, true)
+	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
+	s.cn.claimPartitions()
+	c.Assert(s.cn.isClaimLimitReached(), Equals, true)
+	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
+}

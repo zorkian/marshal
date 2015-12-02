@@ -27,6 +27,9 @@ type ConsumerOptions struct {
 	// of your application running with the same ClientID/GroupID.
 	// TODO: Create an instance ID for Marshaler such that we can detect when
 	// someone else has decided to use our Client/Group.
+	//
+	// Note that this option ignores MaximumClaims, so it is possible to
+	// exceed the claim limit if the ClientID previously held more claims.
 	FastReclaim bool
 
 	// GreedyClaims indicates whether we should attempt to claim all unclaimed
@@ -39,6 +42,16 @@ type ConsumerOptions struct {
 	// you must commit the existing message. This option has a strong penalty to
 	// consumption parallelism.
 	StrictOrdering bool
+
+	// The maximum number of claims this Consumer is allowed to hold simultaneously.
+	// This limits the number of partitions claimed, or the number of topics if
+	// $NAME_OF_TOPIC_CLAIM_OPTION is set.
+	// Using this option will leave some partitions/topics completely unclaimed
+	// if the number of Consumers in this GroupID falls below the number of
+	// partitions/topics that exist.
+	//
+	// Note this limit does not apply to claims made via FastReclaim.
+	MaximumClaims int
 }
 
 // Consumer allows you to safely consume data from a given topic in such a way that you
@@ -110,6 +123,10 @@ func NewConsumerOptions() ConsumerOptions {
 // false. Returns true only if the partition was never claimed and we succeeded in
 // claiming it.
 func (c *Consumer) tryClaimPartition(partID int) bool {
+	if c.isClaimLimitReached() {
+		return false
+	}
+
 	// Partition unclaimed by us, see if it's claimed by anybody
 	currentClaim := c.marshal.GetPartitionClaim(c.topic, partID)
 	if currentClaim.LastHeartbeat > 0 {
@@ -158,6 +175,13 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 // will claim a single partition.
 func (c *Consumer) claimPartitions() {
 	if c.partitions <= 0 {
+		return
+	}
+
+	// Don't bother trying to make claims if we are at our claim limit.
+	// This is just an optimization, because we aren't holding the lock here
+	// this check is repeated inside tryClaimPartition.
+	if c.isClaimLimitReached() {
 		return
 	}
 
@@ -256,16 +280,25 @@ func (c *Consumer) GetCurrentLag() int64 {
 // like a load average in Unix systems: the numbers are kind of related to how much work
 // the system is doing, but by itself they don't tell you much.
 func (c *Consumer) GetCurrentLoad() int {
+	return c.getNumActiveClaims()
+}
+
+// getNumActiveClaims returns the number of claims actively owned by this Consumer.
+func (c *Consumer) getNumActiveClaims() (ct int) {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	ct := 0
 	for _, cl := range c.claims {
 		if cl.Claimed() {
 			ct++
 		}
 	}
-	return ct
+	return
+}
+
+// isClaimLimitReached returns the number of claims actively owned by this Consumer.
+func (c *Consumer) isClaimLimitReached() bool {
+	return c.options.MaximumClaims > 0 && c.getNumActiveClaims() >= c.options.MaximumClaims
 }
 
 // ConsumeChannel returns a read-only channel. Messages that are retrieved from Kafka will be
