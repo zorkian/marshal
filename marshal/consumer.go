@@ -32,6 +32,11 @@ type ConsumerOptions struct {
 	// exceed the claim limit if the ClientID previously held more claims.
 	FastReclaim bool
 
+	// ClaimEntireTopic makes Marshal handle claims on the entire topic rather than
+	// on a per-partition basis. This is used with sharded produce/consume setups.
+	// Defaults to false.
+	ClaimEntireTopic bool
+
 	// GreedyClaims indicates whether we should attempt to claim all unclaimed
 	// partitions on start. This is appropriate in low QPS type environments.
 	// Defaults to false/off.
@@ -45,7 +50,8 @@ type ConsumerOptions struct {
 
 	// The maximum number of claims this Consumer is allowed to hold simultaneously.
 	// This limits the number of partitions claimed, or the number of topics if
-	// $NAME_OF_TOPIC_CLAIM_OPTION is set.
+	// ClaimEntireTopic is set.
+	//
 	// Using this option will leave some partitions/topics completely unclaimed
 	// if the number of Consumers in this GroupID falls below the number of
 	// partitions/topics that exist.
@@ -112,9 +118,10 @@ func (m *Marshaler) NewConsumer(topicName string, options ConsumerOptions) (*Con
 // NewConsumerOptions returns a default set of options for the Consumer.
 func NewConsumerOptions() ConsumerOptions {
 	return ConsumerOptions{
-		FastReclaim:    true,
-		GreedyClaims:   false,
-		StrictOrdering: false,
+		FastReclaim:      true,
+		ClaimEntireTopic: false,
+		GreedyClaims:     false,
+		StrictOrdering:   false,
 	}
 }
 
@@ -123,7 +130,9 @@ func NewConsumerOptions() ConsumerOptions {
 // false. Returns true only if the partition was never claimed and we succeeded in
 // claiming it.
 func (c *Consumer) tryClaimPartition(partID int) bool {
-	if c.isClaimLimitReached() {
+	// This is a partition claim function, only check the limit if we're in partition
+	// claim mode.
+	if !c.options.ClaimEntireTopic && c.isClaimLimitReached() {
 		return false
 	}
 
@@ -135,8 +144,8 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 
 	// Set up internal claim structure we'll track things in, this can block for a while
 	// as it talks to Kafka and waits for rationalizers.
-	newclaim := newClaim(c.topic, partID, c.marshal, c.messages, c.options)
-	if newclaim == nil {
+	newClaim := newClaim(c.topic, partID, c.marshal, c.messages, c.options)
+	if newClaim == nil {
 		return false
 	}
 
@@ -150,14 +159,13 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 		// This can be a long blocking operation so send it to the background. We ultimately
 		// don't care if it finishes or not, because the heartbeat will save us if we don't
 		// submit a release message. This is just an optimization.
-		go func() {
-			newclaim.Release()
-		}()
+		go newClaim.Release()
 		return false
 	}
 
 	// Ensure we don't have another valid claim in this slot. This shouldn't happen and if
-	// it does we treat it as fatal.
+	// it does we treat it as fatal. If this fires, it indicates with high likelihood there
+	// is a bug in the Marshal state machine somewhere.
 	oldClaim, ok := c.claims[partID]
 	if ok && oldClaim != nil {
 		if oldClaim.Claimed() {
@@ -166,7 +174,7 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 	}
 
 	// Save the claim, this makes it available for message consumption and status.
-	c.claims[partID] = newclaim
+	c.claims[partID] = newClaim
 	return true
 }
 
@@ -215,13 +223,50 @@ func (c *Consumer) claimPartitions() {
 	}
 }
 
+// claimTopic attempts to claim the entire topic if we're in that mode. We use partition 0
+// as the key, anybody who has that partition has claimed the entire topic. This requires all
+// consumers to use this mode.
+func (c *Consumer) claimTopic() {
+	if c.partitions <= 0 {
+		return
+	}
+
+	// We use partition 0 as our "key". Whoever claims partition 0 is considered the owner of
+	// the topic. See if partition 0 is claimed or not.
+	lastClaim := c.marshal.GetLastPartitionClaim(c.topic, 0)
+	if lastClaim.isClaimed(time.Now().Unix()) {
+		// If it's not claimed by us, return.
+		if lastClaim.GroupID != c.marshal.groupID ||
+			lastClaim.ClientID != c.marshal.clientID {
+			return
+		}
+	} else {
+		// Unclaimed, so attempt to claim partition 0. This is how we key topic claims.
+		if !c.tryClaimPartition(0) {
+			return
+		}
+	}
+
+	// We either just claimed or we have already owned the 0th partition. Let's iterate
+	// through all partitions and attempt to claim any that we don't own yet.
+	for partID := 1; partID < c.partitions; partID++ {
+		if !c.marshal.IsClaimed(c.topic, partID) {
+			c.tryClaimPartition(partID)
+		}
+	}
+}
+
 // manageClaims is our internal state machine that handles partitions and claiming new
 // ones (or releasing ones).
 func (c *Consumer) manageClaims() {
 	for !c.Terminated() {
 		// Attempt to claim more partitions, this always runs and will keep running until all
 		// partitions in the topic are claimed (by somebody).
-		c.claimPartitions()
+		if c.options.ClaimEntireTopic {
+			c.claimTopic()
+		} else {
+			c.claimPartitions()
+		}
 
 		// Now sleep a bit so we don't pound things
 		// TODO: Raise this later, we shouldn't attempt to claim this fast, this is just for
