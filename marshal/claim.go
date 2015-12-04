@@ -406,6 +406,12 @@ func (c *claim) healthCheck() bool {
 		return false
 	}
 
+	// In topic claim mode we don't do any velocity checking. It's up to the consumer
+	// to ensure they're claiming. TODO: Unclear if this is correct or not.
+	if c.options.ClaimEntireTopic {
+		return true
+	}
+
 	// If current has gone forward of the latest (which is possible, but unlikely)
 	// then we are by definition caught up
 	if c.offsets.Current >= c.offsets.Latest {
