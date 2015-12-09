@@ -299,10 +299,8 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 	// cannot be called within topic.lock.RLock() since it calls topic.lock.Lock()
 	topic := m.getTopicState(m.groupID, topicName, partID)
 
-	topic.lock.RLock()
-	defer topic.lock.RUnlock()
-
 	// If the topic is not claimed, we can short circuit the decision process
+	topic.lock.RLock()
 	if !topic.partitions[partID].isClaimed(m.ts) {
 		return fmt.Errorf("Partition %s:%d is not claimed!", topicName, partID)
 	}
@@ -312,6 +310,7 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 		topic.partitions[partID].ClientID != m.clientID {
 		return fmt.Errorf("Partition %s:%d is not claimed by us!", topicName, partID)
 	}
+	topic.lock.RUnlock()
 
 	// All good, let's heartbeat
 	cl := &msgHeartbeat{
@@ -330,9 +329,7 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 		return fmt.Errorf("Failed to produce heartbeat to Kafka: %s", err)
 	}
 
-	topic.lock.RUnlock()
 	err = m.CommitOffsets(topicName, partID, lastOffset)
-	topic.lock.RLock()
 	return err
 }
 
@@ -342,10 +339,8 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset int64) error {
 	topic := m.getTopicState(m.groupID, topicName, partID)
 
-	topic.lock.RLock()
-	defer topic.lock.RUnlock()
-
 	// If the topic is not claimed, we can short circuit the decision process
+	topic.lock.RLock()
 	if !topic.partitions[partID].isClaimed(m.ts) {
 		return fmt.Errorf("Partition %s:%d is not claimed!", topicName, partID)
 	}
@@ -355,6 +350,7 @@ func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset in
 		topic.partitions[partID].ClientID != m.clientID {
 		return fmt.Errorf("Partition %s:%d is not claimed by us!", topicName, partID)
 	}
+	topic.lock.RUnlock()
 
 	// All good, let's release
 	cl := &msgReleasingPartition{
@@ -373,28 +369,20 @@ func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset in
 		return fmt.Errorf("Failed to produce release to Kafka: %s", err)
 	}
 
-	topic.lock.RUnlock()
 	err = m.CommitOffsets(topicName, partID, lastOffset)
-	topic.lock.RLock()
 	return err
 }
 
 // CommitOffsets will commit the partition offsets to Kafka so it's available in the
-// long-term storage of the offset coordination system
+// long-term storage of the offset coordination system. Note: this method does not ensure
+// that this Marshal instance owns the topic/partition in question.
 func (m *Marshaler) CommitOffsets(topicName string, partID int, lastOffset int64) error {
-	// cannot be called within topic.lock.RLock() since it calls topic.lock.Lock()
-	topic := m.getTopicState(m.groupID, topicName, partID)
-
-	topic.lock.RLock()
-	defer topic.lock.RUnlock()
-
 	err := m.offsets.Commit(topicName, int32(partID), lastOffset)
 	if err != nil {
 		// Do not count this as a returned error as that will cause us to drop consumption, but
 		// do log it so people can see it
-		log.Errorf("%s:%d failed to commit offsets: %s", topicName, partID, err)
+		log.Errorf("[%s:%d] failed to commit offsets: %s", topicName, partID, err)
 	}
-
 	return nil
 }
 
