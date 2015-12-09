@@ -39,5 +39,5 @@ var log *logger
 
 func init() {
 	log = &logger{l: logging.MustGetLogger("PortalMarshal")}
-	logging.SetLevel(logging.WARNING, "PortalMarshal")
+	logging.SetLevel(logging.INFO, "PortalMarshal")
 }
