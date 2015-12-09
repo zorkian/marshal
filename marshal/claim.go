@@ -72,10 +72,10 @@ func newClaim(topic string, partID int, marshal *Marshaler,
 	// Get all available offset information
 	offsets, err := marshal.GetPartitionOffsets(topic, partID)
 	if err != nil {
-		log.Errorf("%s:%d failed to get offsets: %s", topic, partID, err)
+		log.Errorf("[%s:%d] failed to get offsets: %s", topic, partID, err)
 		return nil
 	}
-	log.Debugf("%s:%d consumer offsets: early = %d, cur/comm = %d/%d, late = %d",
+	log.Debugf("[%s:%d] consumer offsets: early = %d, cur/comm = %d/%d, late = %d",
 		topic, partID, offsets.Earliest, offsets.Current, offsets.Committed, offsets.Latest)
 
 	// Take the greatest of the committed/current offset, this means we will recover from
@@ -85,10 +85,10 @@ func newClaim(topic string, partID int, marshal *Marshaler,
 		if offsets.Current > 0 {
 			// This state shouldn't really happen. This implies that someone went back in time
 			// and started consuming earlier than the committed offset.
-			log.Warningf("%s:%d committed offset is %d but heartbeat offset was %d",
+			log.Warningf("[%s:%d] committed offset is %d but heartbeat offset was %d",
 				topic, partID, offsets.Committed, offsets.Current)
 		} else {
-			log.Infof("%s:%d recovering committed offset of %d",
+			log.Infof("[%s:%d] recovering committed offset of %d",
 				topic, partID, offsets.Committed)
 		}
 		offsets.Current = offsets.Committed
@@ -111,9 +111,9 @@ func newClaim(topic string, partID int, marshal *Marshaler,
 	obj.outstandingMessageWait = sync.NewCond(obj.lock)
 
 	// Now try to actually claim it, this can block a while
-	log.Infof("%s:%d consumer attempting to claim", topic, partID)
+	log.Infof("[%s:%d] consumer attempting to claim", topic, partID)
 	if !marshal.ClaimPartition(topic, partID) {
-		log.Infof("%s:%d consumer failed to claim", topic, partID)
+		log.Infof("[%s:%d] consumer failed to claim", topic, partID)
 		return nil
 	}
 
@@ -132,7 +132,7 @@ func (c *claim) updateOffsetsLoop() {
 		ctr++
 		time.Sleep(<-c.marshal.jitters)
 	}
-	log.Debugf("%s:%d no longer claimed, offset loop exiting", c.topic, c.partID)
+	log.Debugf("[%s:%d] no longer claimed, offset loop exiting", c.topic, c.partID)
 }
 
 // setup is the initial worker that initializes the claim structure. Until this is done,
@@ -144,7 +144,7 @@ func (c *claim) setup() {
 	// Of course, if the current offset is greater than the earliest, we must reset
 	// to the earliest known
 	if c.offsets.Current < c.offsets.Earliest {
-		log.Warningf("%s:%d consumer fast-forwarding from %d to %d",
+		log.Warningf("[%s:%d] consumer fast-forwarding from %d to %d",
 			c.topic, c.partID, c.offsets.Current, c.offsets.Earliest)
 		c.offsets.Current = c.offsets.Earliest
 	}
@@ -152,7 +152,7 @@ func (c *claim) setup() {
 	// Since it's claimed, we now want to heartbeat with the last seen offset
 	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
-		log.Errorf("%s:%d consumer failed to heartbeat: %s", c.topic, c.partID, err)
+		log.Errorf("[%s:%d] consumer failed to heartbeat: %s", c.topic, c.partID, err)
 		atomic.StoreInt32(c.claimed, 0)
 		return
 	}
@@ -163,7 +163,7 @@ func (c *claim) setup() {
 	consumerConf.StartOffset = c.offsets.Current
 	kafkaConsumer, err := c.marshal.kafka.Consumer(consumerConf)
 	if err != nil {
-		log.Errorf("%s:%d consumer failed to create Kafka Consumer: %s",
+		log.Errorf("[%s:%d] consumer failed to create Kafka Consumer: %s",
 			c.topic, c.partID, err)
 		// TODO: There is an optimization here where we could release the partition.
 		// As it stands, we're not doing anything,
@@ -178,7 +178,7 @@ func (c *claim) setup() {
 	go c.messagePump()
 
 	// Totally done, let the world know and move on
-	log.Infof("%s:%d consumer claimed at offset %d (is %d behind)",
+	log.Infof("[%s:%d] consumer claimed at offset %d (is %d behind)",
 		c.topic, c.partID, c.offsets.Current, c.offsets.Latest-c.offsets.Current)
 }
 
@@ -187,7 +187,7 @@ func (c *claim) setup() {
 // far ahead it can move our offset.
 func (c *claim) Commit(msg *proto.Message) error {
 	if atomic.LoadInt32(c.claimed) != 1 {
-		return fmt.Errorf("%s:%d is no longer claimed; can't commit offset %d",
+		return fmt.Errorf("[%s:%d] is no longer claimed; can't commit offset %d",
 			c.topic, c.partID, msg.Offset)
 	}
 
@@ -197,7 +197,7 @@ func (c *claim) Commit(msg *proto.Message) error {
 	_, ok := c.tracking[msg.Offset]
 	if !ok {
 		// This is bogus; committing an offset we've never seen?
-		return fmt.Errorf("%s:%d: committing offset %d but we've never seen it",
+		return fmt.Errorf("[%s:%d] committing offset %d but we've never seen it",
 			c.topic, c.partID, msg.Offset)
 	}
 	c.tracking[msg.Offset] = true
@@ -234,6 +234,7 @@ func (c *claim) Release() bool {
 	if !atomic.CompareAndSwapInt32(c.claimed, 1, 0) {
 		return false
 	}
+	log.Infof("[%s:%d] releasing partition claim", c.topic, c.partID)
 
 	// Let's update current offset internally to the last processed
 	c.updateCurrentOffsets()
@@ -243,10 +244,9 @@ func (c *claim) Release() bool {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	log.Infof("%s:%d releasing partition claim", c.topic, c.partID)
 	err := c.marshal.ReleasePartition(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
-		log.Errorf("%s:%d failed to release: %s", c.topic, c.partID, err)
+		log.Errorf("[%s:%d] failed to release: %s", c.topic, c.partID, err)
 		return false
 	}
 	return true
@@ -263,10 +263,9 @@ func (c *claim) CommitOffsets() bool {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	log.Infof("%s:%d releasing partition claim", c.topic, c.partID)
 	err := c.marshal.CommitOffsets(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
-		log.Errorf("%s:%d failed to commit offsets: %s", c.topic, c.partID, err)
+		log.Errorf("[%s:%d] failed to commit offsets: %s", c.topic, c.partID, err)
 		return false
 	}
 	return true
@@ -283,12 +282,12 @@ func (c *claim) messagePump() {
 		if err == proto.ErrOffsetOutOfRange {
 			// Fell out of range, presumably because we're handling this too slow, so
 			// let's abandon this consumer
-			log.Warningf("%s:%d error consuming: out of range, abandoning partition",
+			log.Warningf("[%s:%d] error consuming: out of range, abandoning partition",
 				c.topic, c.partID)
 			go c.Release()
 			return
 		} else if err != nil {
-			log.Errorf("%s:%d error consuming: %s", c.topic, c.partID, err)
+			log.Errorf("[%s:%d] error consuming: %s", c.topic, c.partID, err)
 
 			// Often a consumption error is caused by data going away, such as if we're consuming
 			// from the head and Kafka has deleted the data. In that case we need to wait for
@@ -314,7 +313,7 @@ func (c *claim) messagePump() {
 		// Push the message down to the client (this bypasses the Consumer)
 		c.messages <- msg
 	}
-	log.Debugf("%s:%d no longer claimed, pump exiting", c.topic, c.partID)
+	log.Debugf("[%s:%d] no longer claimed, pump exiting", c.topic, c.partID)
 }
 
 // heartbeat is the internal "send a heartbeat" function. Calling this will immediately
@@ -375,7 +374,7 @@ func (c *claim) updateCurrentOffsets() {
 	// probably broken in the implementation... since that will cause us to grow
 	// forever in memory, let's alert the user
 	if len(c.tracking) > 10000 {
-		log.Errorf("%s:%d has %d uncommitted offsets. You must call Commit.",
+		log.Errorf("[%s:%d] has %d uncommitted offsets. You must call Commit.",
 			c.topic, c.partID, len(c.tracking))
 	}
 }
@@ -400,7 +399,7 @@ func (c *claim) healthCheck() bool {
 	// If our heartbeat is expired, we are definitely unhealthy... don't even bother
 	// with checking velocity
 	if c.lastHeartbeat < time.Now().Unix()-HeartbeatInterval {
-		log.Warningf("%s:%d consumer unhealthy by heartbeat test, releasing",
+		log.Warningf("[%s:%d] consumer unhealthy by heartbeat test, releasing",
 			c.topic, c.partID)
 		go c.Release()
 		return false
@@ -422,7 +421,7 @@ func (c *claim) healthCheck() bool {
 	// If velocity is good, reset cycles behind and exit
 	if partitionVelocity <= consumerVelocity {
 		if c.cyclesBehind != 0 {
-			log.Warningf("%s:%d  catching up: (resetting warning) CV %0.2f < PV %0.2f (warning #%d)",
+			log.Warningf("[%s:%d] catching up: (resetting warning) CV %0.2f < PV %0.2f (warning #%d)",
 				c.topic, c.partID, consumerVelocity, partitionVelocity, c.cyclesBehind)
 		}
 		c.cyclesBehind = 0
@@ -437,14 +436,14 @@ func (c *claim) healthCheck() bool {
 	// partition. If so, do this in a goroutine since it will involve calling out
 	// to Kafka and releasing the partition.
 	if c.cyclesBehind >= 3 {
-		log.Warningf("%s:%d consumer unhealthy, releasing",
+		log.Warningf("[%s:%d] consumer unhealthy, releasing",
 			c.topic, c.partID)
 		go c.Release()
 		return false
 	}
 
 	// Clearly we haven't been behind for long enough, so we're still "healthy"
-	log.Warningf("%s:%d consumer unhealthy: CV %0.2f < PV %0.2f (warning #%d)",
+	log.Warningf("[%s:%d] consumer unhealthy: CV %0.2f < PV %0.2f (warning #%d)",
 		c.topic, c.partID, consumerVelocity, partitionVelocity, c.cyclesBehind)
 	return true
 }
@@ -459,7 +458,7 @@ func (c *claim) healthCheckLoop() {
 		}
 		time.Sleep(<-c.marshal.jitters)
 	}
-	log.Debugf("%s:%d health check loop exiting", c.topic, c.partID)
+	log.Debugf("[%s:%d] health check loop exiting", c.topic, c.partID)
 }
 
 // average returns the average of a given slice of int64s. It ignores 0s as
@@ -507,7 +506,7 @@ func (c *claim) updateOffsets(ctr int) error {
 	// Slow, hits Kafka. Run in a goroutine.
 	offsets, err := c.marshal.GetPartitionOffsets(c.topic, c.partID)
 	if err != nil {
-		log.Errorf("%s:%d failed to get offsets: %s", c.topic, c.partID, err)
+		log.Errorf("[%s:%d] failed to get offsets: %s", c.topic, c.partID, err)
 		return err
 	}
 

@@ -112,7 +112,7 @@ func (m *Marshaler) NewConsumer(topicName string, options ConsumerOptions) (*Con
 				// This looks to be ours, let's do it. This is basically the fast path,
 				// and our heartbeat will happen shortly from the automatic health
 				// check which fires up immediately on newClaim.
-				log.Infof("%s:%d attempting to fast-reclaim", c.topic, partID)
+				log.Infof("[%s:%d] attempting to fast-reclaim", c.topic, partID)
 				c.claims[partID] = newClaim(c.topic, partID, c.marshal, c.messages, options)
 			}
 		}
@@ -249,15 +249,18 @@ func (c *Consumer) claimTopic() {
 		}
 	} else {
 		// Unclaimed, so attempt to claim partition 0. This is how we key topic claims.
+		log.Infof("[%s] attempting to claim topic (key partition 0)", c.topic)
 		if !c.tryClaimPartition(0) {
 			return
 		}
+		log.Infof("[%s] claimed topic (key partition 0) successfully", c.topic)
 	}
 
 	// We either just claimed or we have already owned the 0th partition. Let's iterate
 	// through all partitions and attempt to claim any that we don't own yet.
 	for partID := 1; partID < c.partitions; partID++ {
 		if !c.marshal.IsClaimed(c.topic, partID) {
+			log.Infof("[%s:%d] claiming partition (topic claim mode)", c.topic, partID)
 			c.tryClaimPartition(partID)
 		}
 	}
