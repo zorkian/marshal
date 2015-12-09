@@ -60,6 +60,15 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 		consumerConf.StartOffset = kafka.StartOffsetOldest
 		consumerConf.RequestTimeout = 1 * time.Second
 
+		// Get the offsets of this partition, we're going to arbitrarily pick something that
+		// is ~100,000 from the end if there's more than that.
+		offsets, err := w.GetPartitionOffsets(MarshalTopic, partID)
+		if offsets.Latest-offsets.Earliest > 100000 {
+			consumerConf.StartOffset = offsets.Latest - 100000
+			log.Infof("rationalize[%d]: fast forwarding to offset %d.",
+				partID, consumerConf.StartOffset)
+		}
+
 		consumer, err := w.kafka.Consumer(consumerConf)
 		if err != nil {
 			// Unfortunately this is a fatal error, as without being able to consume this partition
