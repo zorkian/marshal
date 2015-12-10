@@ -138,7 +138,7 @@ func (m *msgBase) Encode() string {
 }
 
 // Type returns the type of this message.
-func (m *msgBase) Type() {
+func (m *msgBase) Type() msgType {
 	panic("Attempted to type the base message. This should never happen.")
 }
 
