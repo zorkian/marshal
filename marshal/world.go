@@ -143,6 +143,25 @@ func (m *Marshaler) getTopicState(groupID, topicName string, partID int) *topicS
 	return topic
 }
 
+// getClaimedTopicState returns a topicState iff it is claimed by the current Marshaler.
+// Else, an error is returned.
+func (m *Marshaler) getTopicState(groupID, topicName string, partID int) (*topicState, err) {
+	topic.lock.RLock()
+	defer topic.lock.RUnlock()
+
+	if !topic.partitions[partID].isClaimed(m.ts) {
+		return nil, fmt.Errorf("Partition %s:%d is not claimed!", topicName, partID)
+	}
+
+	// And if it's not claimed by us...
+	if topic.partitions[partID].GroupID != m.groupID ||
+		topic.partitions[partID].ClientID != m.clientID {
+		return nil, fmt.Errorf("Partition %s:%d is not claimed by us!", topicName, partID)
+	}
+
+	return topic, nil
+}
+
 // Topics returns the list of known topics.
 func (m *Marshaler) Topics() []string {
 	m.lock.RLock()
@@ -296,21 +315,10 @@ func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
 // still owning this partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
 func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) error {
-	// cannot be called within topic.lock.RLock() since it calls topic.lock.Lock()
-	topic := m.getTopicState(m.groupID, topicName, partID)
-
-	// If the topic is not claimed, we can short circuit the decision process
-	topic.lock.RLock()
-	if !topic.partitions[partID].isClaimed(m.ts) {
-		return fmt.Errorf("Partition %s:%d is not claimed!", topicName, partID)
+	topic, err := m.getClaimedTopicState(m.groupID, topicName, partID)
+	if err != nil {
+		return err
 	}
-
-	// And if it's not claimed by us...
-	if topic.partitions[partID].GroupID != m.groupID ||
-		topic.partitions[partID].ClientID != m.clientID {
-		return fmt.Errorf("Partition %s:%d is not claimed by us!", topicName, partID)
-	}
-	topic.lock.RUnlock()
 
 	// All good, let's heartbeat
 	cl := &msgHeartbeat{
@@ -337,20 +345,10 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 // a partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
 func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset int64) error {
-	topic := m.getTopicState(m.groupID, topicName, partID)
-
-	// If the topic is not claimed, we can short circuit the decision process
-	topic.lock.RLock()
-	if !topic.partitions[partID].isClaimed(m.ts) {
-		return fmt.Errorf("Partition %s:%d is not claimed!", topicName, partID)
+	topic, err := m.getClaimedTopicState(m.groupID, topicName, partID)
+	if err != nil {
+		return err
 	}
-
-	// And if it's not claimed by us...
-	if topic.partitions[partID].GroupID != m.groupID ||
-		topic.partitions[partID].ClientID != m.clientID {
-		return fmt.Errorf("Partition %s:%d is not claimed by us!", topicName, partID)
-	}
-	topic.lock.RUnlock()
 
 	// All good, let's release
 	cl := &msgReleasingPartition{
