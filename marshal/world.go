@@ -107,9 +107,9 @@ func (m *Marshaler) getClaimPartition(topicName string) int {
 	return int(uval % uint64(m.partitions))
 }
 
-// getTopicState returns a topicState and possibly creates it and the partition state within
+// getPartitionState returns a topicState and possibly creates it and the partition state within
 // the State.
-func (m *Marshaler) getTopicState(groupID, topicName string, partID int) *topicState {
+func (m *Marshaler) getPartitionState(groupID, topicName string, partID int) *topicState {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -143,9 +143,14 @@ func (m *Marshaler) getTopicState(groupID, topicName string, partID int) *topicS
 	return topic
 }
 
-// getClaimedTopicState returns a topicState iff it is claimed by the current Marshaler.
+// getClaimedPartitionState returns a topicState iff it is claimed by the current Marshaler.
 // Else, an error is returned.
-func (m *Marshaler) getTopicState(groupID, topicName string, partID int) (*topicState, err) {
+func (m *Marshaler) getClaimedPartitionState(
+	groupID, topicName string, partID int) (
+	*topicState, error) {
+
+	topic := m.getPartitionState(groupID, topicName, partID)
+
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
 
@@ -202,7 +207,7 @@ func (m *Marshaler) IsClaimed(topicName string, partID int) bool {
 // describes the consumer that is currently claiming this partition. This is a copy of the
 // claim structure, so changing it cannot change the world state.
 func (m *Marshaler) GetPartitionClaim(topicName string, partID int) PartitionClaim {
-	topic := m.getTopicState(m.groupID, topicName, partID)
+	topic := m.getPartitionState(m.groupID, topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
@@ -217,7 +222,7 @@ func (m *Marshaler) GetPartitionClaim(topicName string, partID int) PartitionCla
 // describes the consumer that is currently or most recently claiming this partition. This is a
 // copy of the claim structure, so changing it cannot change the world state.
 func (m *Marshaler) GetLastPartitionClaim(topicName string, partID int) PartitionClaim {
-	topic := m.getTopicState(m.groupID, topicName, partID)
+	topic := m.getPartitionState(m.groupID, topicName, partID)
 
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
@@ -262,7 +267,7 @@ func (m *Marshaler) GetPartitionOffsets(topicName string, partID int) (Partition
 // want to use a MarshaledConsumer. Returns a bool on whether or not the claim succeeded and
 // whether you can continue.
 func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
-	topic := m.getTopicState(m.groupID, topicName, partID)
+	topic := m.getPartitionState(m.groupID, topicName, partID)
 
 	// Unlock is later, since this function might take a while
 	// TODO: Move this logic to a func and defer the lock (for sanity sake)
@@ -315,7 +320,7 @@ func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
 // still owning this partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
 func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) error {
-	topic, err := m.getClaimedTopicState(m.groupID, topicName, partID)
+	topic, err := m.getClaimedPartitionState(m.groupID, topicName, partID)
 	if err != nil {
 		return err
 	}
@@ -331,7 +336,7 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 		},
 		LastOffset: lastOffset,
 	}
-	_, err := m.producer.Produce(MarshalTopic, int32(topic.claimPartition),
+	_, err = m.producer.Produce(MarshalTopic, int32(topic.claimPartition),
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
 		return fmt.Errorf("Failed to produce heartbeat to Kafka: %s", err)
@@ -345,7 +350,7 @@ func (m *Marshaler) Heartbeat(topicName string, partID int, lastOffset int64) er
 // a partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
 func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset int64) error {
-	topic, err := m.getClaimedTopicState(m.groupID, topicName, partID)
+	topic, err := m.getClaimedPartitionState(m.groupID, topicName, partID)
 	if err != nil {
 		return err
 	}
@@ -361,7 +366,7 @@ func (m *Marshaler) ReleasePartition(topicName string, partID int, lastOffset in
 		},
 		LastOffset: lastOffset,
 	}
-	_, err := m.producer.Produce(MarshalTopic, int32(topic.claimPartition),
+	_, err = m.producer.Produce(MarshalTopic, int32(topic.claimPartition),
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
 		return fmt.Errorf("Failed to produce release to Kafka: %s", err)
