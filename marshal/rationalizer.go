@@ -21,107 +21,133 @@ import (
 func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 	log.Debugf("rationalize[%d]: starting", partID)
 	out := make(chan message, 1000)
-	go func() {
-		var err error
-		var alive bool
-		var offsetFirst, offsetNext int64
+	go w.consumeFromKafka(partID, out, false)
+	return out
+}
 
-		retry := &backoff.Backoff{Min: 500 * time.Millisecond, Jitter: true}
-		for ; true; time.Sleep(retry.Duration()) {
-			// Figure out how many messages are in this topic. This can fail if the broker handling
-			// this partition is down, so we will loop.
-			offsetFirst, err = w.kafka.OffsetEarliest(MarshalTopic, int32(partID))
-			if err != nil {
-				log.Errorf("rationalize[%d]: failed to get offset: %s", partID, err)
-				continue
-			}
-			offsetNext, err = w.kafka.OffsetLatest(MarshalTopic, int32(partID))
-			if err != nil {
-				log.Errorf("rationalize[%d]: failed to get offset: %s", partID, err)
-				continue
-			}
-			log.Debugf("rationalize[%d]: offsets %d to %d", partID, offsetFirst, offsetNext)
+// consumeFromKafka will start consuming messages from Kafka and writing them to the given
+// channel forever.
+func (w *Marshaler) consumeFromKafka(partID int, out chan message, startOldest bool) {
+	var err error
+	var alive bool
+	var offsetFirst, offsetNext int64
 
-			// TODO: Is there a case where the latest offset is X>0 but there is no data in
-			// the partition? does the offset reset to 0?
-			if offsetNext == 0 || offsetFirst == offsetNext {
-				alive = true
-				w.rationalizers.Done()
-			}
-			break
+	retry := &backoff.Backoff{Min: 500 * time.Millisecond, Jitter: true}
+	for ; true; time.Sleep(retry.Duration()) {
+		// Figure out how many messages are in this topic. This can fail if the broker handling
+		// this partition is down, so we will loop.
+		offsetFirst, err = w.kafka.OffsetEarliest(MarshalTopic, int32(partID))
+		if err != nil {
+			log.Errorf("rationalize[%d]: failed to get offset: %s", partID, err)
+			continue
+		}
+		offsetNext, err = w.kafka.OffsetLatest(MarshalTopic, int32(partID))
+		if err != nil {
+			log.Errorf("rationalize[%d]: failed to get offset: %s", partID, err)
+			continue
+		}
+		log.Debugf("rationalize[%d]: offsets %d to %d", partID, offsetFirst, offsetNext)
+
+		// TODO: Is there a case where the latest offset is X>0 but there is no data in
+		// the partition? does the offset reset to 0?
+		if offsetNext == 0 || offsetFirst == offsetNext {
+			alive = true
+			w.rationalizers.Done()
+		}
+		break
+	}
+	retry.Reset()
+
+	// Assume we're starting at the oldest offset for consumption
+	consumerConf := kafka.NewConsumerConf(MarshalTopic, int32(partID))
+	consumerConf.StartOffset = kafka.StartOffsetOldest
+	consumerConf.RequestTimeout = 1 * time.Second
+
+	// Get the offsets of this partition, we're going to arbitrarily pick something that
+	// is ~100,000 from the end if there's more than that. This is only if startOldest is
+	// false, i.e., we didn't run into a "message too new" situation.
+	checkMessageTs := false
+	if !startOldest && offsetNext-offsetFirst > 100000 {
+		checkMessageTs = true
+		consumerConf.StartOffset = offsetNext - 100000
+		log.Infof("rationalize[%d]: fast forwarding to offset %d.",
+			partID, consumerConf.StartOffset)
+	}
+
+	consumer, err := w.kafka.Consumer(consumerConf)
+	if err != nil {
+		// Unfortunately this is a fatal error, as without being able to consume this partition
+		// we can't effectively rationalize.
+		log.Fatalf("rationalize[%d]: Failed to create consumer: %s", partID, err)
+	}
+
+	// Consume messages forever, or until told to quit.
+	for {
+		if atomic.LoadInt32(w.quit) == 1 {
+			log.Debugf("rationalize[%d]: terminating.", partID)
+			close(out)
+			return
+		}
+
+		msgb, err := consumer.Consume()
+		if err != nil {
+			// The internal consumer will do a number of retries. If we get an error here,
+			// we're probably in the middle of a partition handoff. We should pause so we
+			// don't hammer the cluster, but otherwise continue.
+			log.Warningf("rationalize[%d]: failed to consume: %s", partID, err)
+			time.Sleep(retry.Duration())
+			continue
 		}
 		retry.Reset()
 
-		// TODO: Technically we don't have to start at the beginning, we just need to start back
-		// a couple heartbeat intervals to get a full state of the world. But this is easiest
-		// for right now...
-		// TODO: Think about the above. Is it actually true?
-		consumerConf := kafka.NewConsumerConf(MarshalTopic, int32(partID))
-		consumerConf.StartOffset = kafka.StartOffsetOldest
-		consumerConf.RequestTimeout = 1 * time.Second
-
-		consumer, err := w.kafka.Consumer(consumerConf)
+		msg, err := decode(msgb.Value)
 		if err != nil {
-			// Unfortunately this is a fatal error, as without being able to consume this partition
-			// we can't effectively rationalize.
-			log.Fatalf("rationalize[%d]: Failed to create consumer: %s", partID, err)
-		}
+			// Invalid message in the stream. This should never happen, but if it does, just
+			// continue on.
+			// TODO: We should probably think about this. If we end up in a situation where
+			// one version of this software has a bug that writes invalid messages, it could
+			// be doing things we don't anticipate. Of course, crashing all consumers
+			// reading that partition is also bad.
+			log.Errorf("rationalize[%d]: %s", partID, err)
 
-		// Consume messages forever, or until told to quit.
-		for {
-			if atomic.LoadInt32(w.quit) == 1 {
-				log.Debugf("rationalize[%d]: terminating.", partID)
-				close(out)
-				return
-			}
-
-			msgb, err := consumer.Consume()
-			if err != nil {
-				// The internal consumer will do a number of retries. If we get an error here,
-				// we're probably in the middle of a partition handoff. We should pause so we
-				// don't hammer the cluster, but otherwise continue.
-				log.Warningf("rationalize[%d]: failed to consume: %s", partID, err)
-				time.Sleep(retry.Duration())
-				continue
-			}
-			retry.Reset()
-
-			msg, err := decode(msgb.Value)
-			if err != nil {
-				// Invalid message in the stream. This should never happen, but if it does, just
-				// continue on.
-				// TODO: We should probably think about this. If we end up in a situation where
-				// one version of this software has a bug that writes invalid messages, it could
-				// be doing things we don't anticipate. Of course, crashing all consumers
-				// reading that partition is also bad.
-				log.Errorf("rationalize[%d]: %s", partID, err)
-
-				// In the case where the first message is an invalid message, we need to
-				// to notify that we're alive now
-				if !alive {
-					alive = true
-					w.rationalizers.Done()
-				}
-				continue
-			}
-
-			log.Debugf("rationalize[%d]: @%d: [%s]", partID, msgb.Offset, msg.Encode())
-			out <- msg
-
-			// This is a one-time thing that fires the first time the rationalizer comes up
-			// and makes sure we actually process all of the messages.
-			if !alive && msgb.Offset >= offsetNext-1 {
-				for len(out) > 0 {
-					time.Sleep(100 * time.Millisecond)
-				}
-				log.Infof("rationalize[%d]: reached offset %d, now alive",
-					partID, msgb.Offset)
+			// In the case where the first message is an invalid message, we need to
+			// to notify that we're alive now
+			if !alive {
 				alive = true
 				w.rationalizers.Done()
 			}
+			continue
 		}
-	}()
-	return out
+
+		// If we are on our first message, and we started at a non-zero offset, we need
+		// to check to make sure that the timestamp is older than a given threshold. If it's
+		// too new, that indicates our 100000 try didn't work, so let's go from the start.
+		// TODO: This could be a binary search or something.
+		if checkMessageTs {
+			if int64(msg.Timestamp()) > time.Now().Unix()-HeartbeatInterval*2 {
+				log.Warningf("rationalize[%d]: rewinding, fast-forwarded message was too new",
+					partID)
+				go w.consumeFromKafka(partID, out, true)
+				return // terminate self.
+			}
+			checkMessageTs = false
+		}
+
+		log.Debugf("rationalize[%d]: @%d: [%s]", partID, msgb.Offset, msg.Encode())
+		out <- msg
+
+		// This is a one-time thing that fires the first time the rationalizer comes up
+		// and makes sure we actually process all of the messages.
+		if !alive && msgb.Offset >= offsetNext-1 {
+			for len(out) > 0 {
+				time.Sleep(100 * time.Millisecond)
+			}
+			log.Infof("rationalize[%d]: reached offset %d, now alive",
+				partID, msgb.Offset)
+			alive = true
+			w.rationalizers.Done()
+		}
+	}
 }
 
 // updateClaim is called whenever we need to adjust a claim structure.

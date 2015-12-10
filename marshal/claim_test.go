@@ -236,6 +236,8 @@ func (s *ClaimSuite) TestCommitOutstanding(c *C) {
 	msg1 := s.consumeOne(c)
 	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
 	c.Assert(s.cl.Commit(msg1), IsNil)
+	// TODO: There's a race here. If the background goroutine decides to run a health check
+	// here it will consume our offset and this test fails. It's rare but possible.
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 6)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 
