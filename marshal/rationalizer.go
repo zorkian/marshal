@@ -67,13 +67,11 @@ func (w *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 	// is ~100,000 from the end if there's more than that. This is only if startOldest is
 	// false, i.e., we didn't run into a "message too new" situation.
 	checkMessageTs := false
-	if !startOldest {
-		if offsetNext-offsetFirst > 100000 {
-			checkMessageTs = true
-			consumerConf.StartOffset = offsetNext - 100000
-			log.Infof("rationalize[%d]: fast forwarding to offset %d.",
-				partID, consumerConf.StartOffset)
-		}
+	if !startOldest && offsetNext-offsetFirst > 100000 {
+		checkMessageTs = true
+		consumerConf.StartOffset = offsetNext - 100000
+		log.Infof("rationalize[%d]: fast forwarding to offset %d.",
+			partID, consumerConf.StartOffset)
 	}
 
 	consumer, err := w.kafka.Consumer(consumerConf)
@@ -126,7 +124,7 @@ func (w *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 		// too new, that indicates our 100000 try didn't work, so let's go from the start.
 		// TODO: This could be a binary search or something.
 		if checkMessageTs {
-			if int64(msg.(*msgBase).Time) > time.Now().Unix()-HeartbeatInterval*2 {
+			if int64(msg.Timestamp()) > time.Now().Unix()-HeartbeatInterval*2 {
 				log.Warningf("rationalize[%d]: rewinding, fast-forwarded message was too new",
 					partID)
 				go w.consumeFromKafka(partID, out, true)

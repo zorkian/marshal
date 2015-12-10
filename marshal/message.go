@@ -49,6 +49,7 @@ const (
 
 type message interface {
 	Encode() string
+	Timestamp() int
 	Type() msgType
 }
 
@@ -142,6 +143,11 @@ func (m *msgBase) Type() msgType {
 	panic("Attempted to type the base message. This should never happen.")
 }
 
+// Timestamp returns the timestamp of the message
+func (m *msgBase) Timestamp() int {
+	return m.Time
+}
+
 // msgHeartbeat is sent regularly by all consumers to re-up their claim to the partition that
 // they're consuming.
 type msgHeartbeat struct {
@@ -159,6 +165,11 @@ func (m *msgHeartbeat) Type() msgType {
 	return msgTypeHeartbeat
 }
 
+// Timestamp returns the timestamp of the message
+func (m *msgHeartbeat) Timestamp() int {
+	return m.Time
+}
+
 // msgClaimingPartition is used in the claim flow.
 type msgClaimingPartition struct {
 	msgBase
@@ -172,6 +183,11 @@ func (m *msgClaimingPartition) Encode() string {
 // Type returns the type of this message.
 func (m *msgClaimingPartition) Type() msgType {
 	return msgTypeClaimingPartition
+}
+
+// Timestamp returns the timestamp of the message
+func (m *msgClaimingPartition) Timestamp() int {
+	return m.Time
 }
 
 // msgReleasingPartition is used in a controlled shutdown to indicate that you are done with
@@ -191,6 +207,11 @@ func (m *msgReleasingPartition) Type() msgType {
 	return msgTypeReleasingPartition
 }
 
+// Timestamp returns the timestamp of the message
+func (m *msgReleasingPartition) Timestamp() int {
+	return m.Time
+}
+
 // msgClaimingMessages is used for at-most-once consumption semantics, this is a pre-commit
 // advisory message.
 type msgClaimingMessages struct {
@@ -206,4 +227,9 @@ func (m *msgClaimingMessages) Encode() string {
 // Type returns the type of this message.
 func (m *msgClaimingMessages) Type() msgType {
 	return msgTypeClaimingMessages
+}
+
+// Timestamp returns the timestamp of the message
+func (m *msgClaimingMessages) Timestamp() int {
+	return m.Time
 }
