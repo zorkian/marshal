@@ -32,7 +32,7 @@ func (s *RationalizerSuite) SetUpTest(c *C) {
 	// Build our return channel and insert it (simulating what the marshal does for
 	// actually trying to claim)
 	s.ret = make(chan bool, 1)
-	topic := s.m.getTopicState(s.m.groupID, "test1", 0)
+	topic := s.m.getPartitionState(s.m.groupID, "test1", 0)
 	topic.lock.Lock()
 	topic.partitions[0].pendingClaims = append(topic.partitions[0].pendingClaims, s.ret)
 	topic.lock.Unlock()

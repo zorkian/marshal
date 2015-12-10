@@ -328,17 +328,19 @@ func (c *claim) heartbeat() bool {
 	// Let's update current offset internally to the last processed
 	c.updateCurrentOffsets()
 
+	// Lock held because we use c.offsets and update c.lastHeartbeat below
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
 	// Now heartbeat this value and update our heartbeat time
 	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
-		log.Errorf("%s:%d failed to heartbeat, releasing", c.topic, c.partID)
+		log.Errorf("[%s:%d] failed to heartbeat, releasing: %s", c.topic, c.partID, err)
 		go c.Release()
 	}
 
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	log.Debugf("%s:%d heartbeat: current offset %d with %d uncommitted messages",
-		c.offsets.Current, c.outstandingMessages)
+	log.Infof("[%s:%d] heartbeat: current offset %d with %d uncommitted messages",
+		c.topic, c.partID, c.offsets.Current, c.outstandingMessages)
 	c.lastHeartbeat = time.Now().Unix()
 	return true
 }
@@ -346,8 +348,6 @@ func (c *claim) heartbeat() bool {
 // updateCurrentOffsets updates the current offsets so that a Commit/Heartbeat can pick up the latest
 // offsets
 func (c *claim) updateCurrentOffsets() {
-	// TODO: This holds a lock around a Kafka transaction do we really want that?
-	// Won't this block consumption pretty hard?
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
