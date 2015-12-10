@@ -310,6 +310,8 @@ func (c *Consumer) Terminate(release bool) bool {
 			}
 		}
 	}
+
+	close(c.messages)
 	return true
 }
 
