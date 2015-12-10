@@ -223,6 +223,8 @@ func (c *Consumer) Terminate() bool {
 			claim.Release()
 		}
 	}
+
+	close(c.messages)
 	return true
 }
 
