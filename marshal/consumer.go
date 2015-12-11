@@ -166,7 +166,7 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 		// This can be a long blocking operation so send it to the background. We ultimately
 		// don't care if it finishes or not, because the heartbeat will save us if we don't
 		// submit a release message. This is just an optimization.
-		go newClaim.Release()
+		go newClaim.Release(true)
 		return false
 	}
 
@@ -303,11 +303,7 @@ func (c *Consumer) Terminate(release bool) bool {
 
 	for _, claim := range c.claims {
 		if claim != nil {
-			if release {
-				claim.Release()
-			} else {
-				claim.CommitOffsets()
-			}
+			claim.Release(release)
 		}
 	}
 

@@ -303,7 +303,7 @@ func (s *ConsumerSuite) TestCommittedOffset(c *C) {
 	offset, _, err := s.m.offsets.Offset("test16", 0)
 	c.Assert(err, IsNil)
 	c.Assert(offset, Equals, int64(3))
-	c.Assert(s.cn.claims[0].Release(), Equals, true)
+	c.Assert(s.cn.claims[0].Release(true), Equals, true)
 	c.Assert(s.m.waitForRsteps(4), Equals, 4)
 	c.Assert(s.cn.claims[0].Claimed(), Equals, false)
 	s.cn.claims[0] = nil

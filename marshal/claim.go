@@ -38,11 +38,13 @@ type claim struct {
 
 	// lock protects all access to the member variables of this struct except for the
 	// messages channel, which can be read from or written to without holding the lock.
-	lock          *sync.RWMutex
-	offsets       PartitionOffsets
-	marshal       *Marshaler
-	rand          *rand.Rand
-	claimed       *int32
+	lock         *sync.RWMutex
+	messagesLock *sync.Mutex
+	offsets      PartitionOffsets
+	marshal      *Marshaler
+	rand         *rand.Rand
+	claimed      *int32
+
 	lastHeartbeat int64
 	options       ConsumerOptions
 	consumer      kafka.Consumer
@@ -96,16 +98,17 @@ func newClaim(topic string, partID int, marshal *Marshaler,
 
 	// Construct object and set it up
 	obj := &claim{
-		lock:     &sync.RWMutex{},
-		marshal:  marshal,
-		topic:    topic,
-		partID:   partID,
-		claimed:  new(int32),
-		offsets:  offsets,
-		messages: messages,
-		options:  options,
-		tracking: make(map[int64]bool),
-		rand:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		lock:         &sync.RWMutex{},
+		messagesLock: &sync.Mutex{},
+		marshal:      marshal,
+		topic:        topic,
+		partID:       partID,
+		claimed:      new(int32),
+		offsets:      offsets,
+		messages:     messages,
+		options:      options,
+		tracking:     make(map[int64]bool),
+		rand:         rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	atomic.StoreInt32(obj.claimed, 1)
 	obj.outstandingMessageWait = sync.NewCond(obj.lock)
@@ -229,13 +232,19 @@ func (c *claim) GetCurrentLag() int64 {
 	return 0
 }
 
-// Release will invoke our release mechanism if and only if we are still claimed.
-func (c *claim) Release() bool {
+// Release will invoke commit offsets and may release the Kafka partition depending on whether
+// releasePartition was passed or not
+func (c *claim) Release(releasePartition bool) bool {
 	if !atomic.CompareAndSwapInt32(c.claimed, 1, 0) {
 		return false
 	}
 	log.Infof("[%s:%d] releasing partition claim", c.topic, c.partID)
 
+	// need to serialize access to the messages channel. We should not release if the message pump
+	// is about to write to the consumer channel
+	c.messagesLock.Lock()
+	defer c.messagesLock.Unlock()
+
 	// Let's update current offset internally to the last processed
 	c.updateCurrentOffsets()
 
@@ -243,29 +252,15 @@ func (c *claim) Release() bool {
 	// is reasonable. Held because of using offsetCurrent below.
 	c.lock.RLock()
 	defer c.lock.RUnlock()
+	var err error
+	if releasePartition {
+		err = c.marshal.ReleasePartition(c.topic, c.partID, c.offsets.Current)
+	} else {
+		err = c.marshal.CommitOffsets(c.topic, c.partID, c.offsets.Current)
+	}
 
-	err := c.marshal.ReleasePartition(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
 		log.Errorf("[%s:%d] failed to release: %s", c.topic, c.partID, err)
-		return false
-	}
-	return true
-}
-
-// CommitOffsets will commit offsets in the Marshal topic if and only if we are still claimed.
-// CommitOffsets does NOT release the partition
-func (c *claim) CommitOffsets() bool {
-	// Let's update current offset internally to the last processed
-	c.updateCurrentOffsets()
-
-	// Holds the lock through a Kafka transaction, but since we're releasing I think this
-	// is reasonable. Held because of using offsetCurrent below.
-	c.lock.RLock()
-	defer c.lock.RUnlock()
-
-	err := c.marshal.CommitOffsets(c.topic, c.partID, c.offsets.Current)
-	if err != nil {
-		log.Errorf("[%s:%d] failed to commit offsets: %s", c.topic, c.partID, err)
 		return false
 	}
 	return true
@@ -284,7 +279,7 @@ func (c *claim) messagePump() {
 			// let's abandon this consumer
 			log.Warningf("[%s:%d] error consuming: out of range, abandoning partition",
 				c.topic, c.partID)
-			go c.Release()
+			go c.Release(true)
 			return
 		} else if err != nil {
 			log.Errorf("[%s:%d] error consuming: %s", c.topic, c.partID, err)
@@ -311,11 +306,16 @@ func (c *claim) messagePump() {
 		c.lock.Unlock()
 
 		// Push the message down to the client (this bypasses the Consumer)
-		// Don't write messages to the consumer channel once it's terminated
-		// since the channel will be closed
-		if !c.consumer.Terminated() {
-			c.messages <- msg
-		}
+		// We should NOT write to the consumer channel if the claim is no longer claimed. This
+		// needs to be serialized with Release, otherwise a race-condition can potentially
+		// lead to a write to a closed-channel. That's why we're using this lock. We're not
+		// using the main lock to avoid deadlocks since the write to the channel is blocking
+		// until someone consumes the message blocking all Commit operations
+		c.messagesLock.Lock()
+        if c.Claimed() {
+		    c.messages <- msg
+        }
+		c.messagesLock.Unlock()
 	}
 	log.Debugf("[%s:%d] no longer claimed, pump exiting", c.topic, c.partID)
 }
@@ -340,7 +340,7 @@ func (c *claim) heartbeat() bool {
 	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
 		log.Errorf("[%s:%d] failed to heartbeat, releasing: %s", c.topic, c.partID, err)
-		go c.Release()
+		go c.Release(true)
 	}
 
 	log.Infof("[%s:%d] heartbeat: current offset %d with %d uncommitted messages",
@@ -405,7 +405,7 @@ func (c *claim) healthCheck() bool {
 	if c.lastHeartbeat < time.Now().Unix()-HeartbeatInterval {
 		log.Warningf("[%s:%d] consumer unhealthy by heartbeat test, releasing",
 			c.topic, c.partID)
-		go c.Release()
+		go c.Release(true)
 		return false
 	}
 
@@ -442,7 +442,7 @@ func (c *claim) healthCheck() bool {
 	if c.cyclesBehind >= 3 {
 		log.Warningf("[%s:%d] consumer unhealthy, releasing",
 			c.topic, c.partID)
-		go c.Release()
+		go c.Release(true)
 		return false
 	}
 
