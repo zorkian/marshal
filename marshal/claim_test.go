@@ -220,7 +220,7 @@ func (s *ClaimSuite) TestTeardown(c *C) {
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
 	c.Assert(s.cl.Claimed(), Equals, true)
 	c.Assert(s.cl.Release(false), Equals, true)
-	c.Assert(s.cl.Claimed(), Equals, false)
+	c.Assert(s.cl.Claimed(), Equals, true)
 }
 
 func (s *ClaimSuite) TestCommitOutstanding(c *C) {

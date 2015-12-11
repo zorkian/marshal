@@ -261,7 +261,7 @@ func (c *claim) Release(releasePartition bool) bool {
 	var err error
 	if releasePartition {
 		log.Infof("[%s:%d] releasing partition claim", c.topic, c.partID)
-		atomic.StoreInt32(c.claimed, 1)
+		atomic.StoreInt32(c.claimed, 0)
 		err = c.marshal.ReleasePartition(c.topic, c.partID, c.offsets.Current)
 	} else {
 		err = c.marshal.CommitOffsets(c.topic, c.partID, c.offsets.Current)
