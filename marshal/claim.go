@@ -311,7 +311,11 @@ func (c *claim) messagePump() {
 		c.lock.Unlock()
 
 		// Push the message down to the client (this bypasses the Consumer)
-		c.messages <- msg
+		// Don't write messages to the consumer channel once it's terminated
+		// since the channel will be closed
+		if !c.consumer.Terminated() {
+			c.messages <- msg
+		}
 	}
 	log.Debugf("[%s:%d] no longer claimed, pump exiting", c.topic, c.partID)
 }
