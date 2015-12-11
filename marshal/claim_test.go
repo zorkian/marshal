@@ -30,7 +30,7 @@ func (s *ClaimSuite) SetUpTest(c *C) {
 }
 
 func (s *ClaimSuite) TearDownTest(c *C) {
-	s.cl.Release(true)
+	s.cl.Release()
 	s.m.Terminate()
 	s.s.Close()
 }
@@ -207,19 +207,19 @@ func (s *ClaimSuite) TestRelease(c *C) {
 	// partition
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
 	c.Assert(s.cl.Claimed(), Equals, true)
-	c.Assert(s.cl.Release(true), Equals, true)
+	c.Assert(s.cl.Release(), Equals, true)
 	c.Assert(s.cl.Claimed(), Equals, false)
 	c.Assert(s.m.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
-	c.Assert(s.cl.Release(true), Equals, false)
+	c.Assert(s.cl.Release(), Equals, false)
 }
 
-func (s *ClaimSuite) TestTeardown(c *C) {
+func (s *ClaimSuite) TestTerminate(c *C) {
 	// Test that calling Release on a claim properly sets the flag and commits offsets
 	// for the partition
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
 	c.Assert(s.cl.Claimed(), Equals, true)
-	c.Assert(s.cl.Release(false), Equals, true)
+	c.Assert(s.cl.Terminate(), Equals, true)
 	c.Assert(s.cl.Claimed(), Equals, true)
 }
 
@@ -242,7 +242,7 @@ func (s *ClaimSuite) TestCommitOutstanding(c *C) {
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 
 	// Commit the offsets....should update current offset and tracking for the claim
-	c.Assert(s.cl.Release(false), Equals, true)
+	c.Assert(s.cl.Terminate(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
 }
@@ -276,7 +276,7 @@ func (s *ClaimSuite) TestHeartbeat(c *C) {
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(10))
 
 	// And test that releasing means we can't update heartbeat anymore
-	c.Assert(s.cl.Release(true), Equals, true)
+	c.Assert(s.cl.Release(), Equals, true)
 	c.Assert(s.m.waitForRsteps(4), Equals, 4)
 	s.cl.offsets.Current = 20
 	c.Assert(s.cl.heartbeat(), Equals, false)

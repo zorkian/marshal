@@ -239,9 +239,20 @@ func (c *claim) GetCurrentLag() int64 {
 	return 0
 }
 
-// Release will invoke commit offsets and may release the Kafka partition depending on whether
-// releasePartition was passed or not
-func (c *claim) Release(releasePartition bool) bool {
+// Release will invoke commit offsets and release the Kafka partition. After calling Release,
+// consumer cannot consume messages anymore
+func (c *claim) Release() bool {
+	return c.teardown(true)
+}
+
+// Terminate will invoke commit offsets, terminate the claim, but does NOT release the partition.
+// After calling Release, consumer cannot consume messages anymore
+func (c *claim) Terminate() bool {
+	return c.teardown(false)
+}
+
+// internal function that will teardown the claim. It may release the partition or
+func (c *claim) teardown(releasePartition bool) bool {
 	if !atomic.CompareAndSwapInt32(c.terminated, 0, 1) {
 		return false
 	}
@@ -287,7 +298,7 @@ func (c *claim) messagePump() {
 			// let's abandon this consumer
 			log.Warningf("[%s:%d] error consuming: out of range, abandoning partition",
 				c.topic, c.partID)
-			go c.Release(true)
+			go c.Release()
 			return
 		} else if err != nil {
 			log.Errorf("[%s:%d] error consuming: %s", c.topic, c.partID, err)
@@ -348,7 +359,7 @@ func (c *claim) heartbeat() bool {
 	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
 		log.Errorf("[%s:%d] failed to heartbeat, releasing: %s", c.topic, c.partID, err)
-		go c.Release(true)
+		go c.Release()
 	}
 
 	log.Infof("[%s:%d] heartbeat: current offset %d with %d uncommitted messages",
@@ -413,7 +424,7 @@ func (c *claim) healthCheck() bool {
 	if c.lastHeartbeat < time.Now().Unix()-HeartbeatInterval {
 		log.Warningf("[%s:%d] consumer unhealthy by heartbeat test, releasing",
 			c.topic, c.partID)
-		go c.Release(true)
+		go c.Release()
 		return false
 	}
 
@@ -450,7 +461,7 @@ func (c *claim) healthCheck() bool {
 	if c.cyclesBehind >= 3 {
 		log.Warningf("[%s:%d] consumer unhealthy, releasing",
 			c.topic, c.partID)
-		go c.Release(true)
+		go c.Release()
 		return false
 	}
 
