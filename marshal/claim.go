@@ -312,9 +312,9 @@ func (c *claim) messagePump() {
 		// using the main lock to avoid deadlocks since the write to the channel is blocking
 		// until someone consumes the message blocking all Commit operations
 		c.messagesLock.Lock()
-        if c.Claimed() {
-		    c.messages <- msg
-        }
+		if c.Claimed() {
+			c.messages <- msg
+		}
 		c.messagesLock.Unlock()
 	}
 	log.Debugf("[%s:%d] no longer claimed, pump exiting", c.topic, c.partID)
