@@ -38,13 +38,13 @@ type claim struct {
 
 	// lock protects all access to the member variables of this struct except for the
 	// messages channel, which can be read from or written to without holding the lock.
-	lock         *sync.RWMutex
-	messagesLock *sync.Mutex
-	offsets      PartitionOffsets
-	marshal      *Marshaler
-	rand         *rand.Rand
-	claimed      *int32
-
+	lock          *sync.RWMutex
+	messagesLock  *sync.Mutex
+	offsets       PartitionOffsets
+	marshal       *Marshaler
+	rand          *rand.Rand
+	claimed       *int32
+	terminated    *int32
 	lastHeartbeat int64
 	options       ConsumerOptions
 	consumer      kafka.Consumer
@@ -104,6 +104,7 @@ func newClaim(topic string, partID int, marshal *Marshaler,
 		topic:        topic,
 		partID:       partID,
 		claimed:      new(int32),
+		terminated:   new(int32),
 		offsets:      offsets,
 		messages:     messages,
 		options:      options,
@@ -221,6 +222,12 @@ func (c *claim) Claimed() bool {
 	return atomic.LoadInt32(c.claimed) == 1
 }
 
+// Terminated returns whether the consumer has terminated the Claim. The claim may or may NOT
+// remain claimed depending on whether it was released or not.
+func (c *claim) Terminated() bool {
+	return atomic.LoadInt32(c.terminated) == 1
+}
+
 // GetCurrentLag returns this partition's cursor lag.
 func (c *claim) GetCurrentLag() int64 {
 	c.lock.RLock()
@@ -235,10 +242,9 @@ func (c *claim) GetCurrentLag() int64 {
 // Release will invoke commit offsets and may release the Kafka partition depending on whether
 // releasePartition was passed or not
 func (c *claim) Release(releasePartition bool) bool {
-	if !atomic.CompareAndSwapInt32(c.claimed, 1, 0) {
+	if !atomic.CompareAndSwapInt32(c.terminated, 0, 1) {
 		return false
 	}
-	log.Infof("[%s:%d] releasing partition claim", c.topic, c.partID)
 
 	// need to serialize access to the messages channel. We should not release if the message pump
 	// is about to write to the consumer channel
@@ -254,6 +260,8 @@ func (c *claim) Release(releasePartition bool) bool {
 	defer c.lock.RUnlock()
 	var err error
 	if releasePartition {
+		log.Infof("[%s:%d] releasing partition claim", c.topic, c.partID)
+		atomic.StoreInt32(c.claimed, 1)
 		err = c.marshal.ReleasePartition(c.topic, c.partID, c.offsets.Current)
 	} else {
 		err = c.marshal.CommitOffsets(c.topic, c.partID, c.offsets.Current)
@@ -312,7 +320,7 @@ func (c *claim) messagePump() {
 		// using the main lock to avoid deadlocks since the write to the channel is blocking
 		// until someone consumes the message blocking all Commit operations
 		c.messagesLock.Lock()
-		if c.Claimed() {
+		if !c.Terminated() {
 			c.messages <- msg
 		}
 		c.messagesLock.Unlock()
