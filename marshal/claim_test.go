@@ -214,12 +214,12 @@ func (s *ClaimSuite) TestRelease(c *C) {
 	c.Assert(s.cl.Release(), Equals, false)
 }
 
-func (s *ClaimSuite) TestCommitOffsets(c *C) {
+func (s *ClaimSuite) TestTerminate(c *C) {
 	// Test that calling Release on a claim properly sets the flag and commits offsets
 	// for the partition
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
 	c.Assert(s.cl.Claimed(), Equals, true)
-	c.Assert(s.cl.CommitOffsets(), Equals, true)
+	c.Assert(s.cl.Terminate(), Equals, true)
 	c.Assert(s.cl.Claimed(), Equals, true)
 }
 
@@ -242,7 +242,7 @@ func (s *ClaimSuite) TestCommitOutstanding(c *C) {
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 
 	// Commit the offsets....should update current offset and tracking for the claim
-	c.Assert(s.cl.CommitOffsets(), Equals, true)
+	c.Assert(s.cl.Terminate(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
 }

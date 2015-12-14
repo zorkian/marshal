@@ -306,7 +306,7 @@ func (c *Consumer) Terminate(release bool) bool {
 			if release {
 				claim.Release()
 			} else {
-				claim.CommitOffsets()
+				claim.Terminate()
 			}
 		}
 	}

@@ -102,7 +102,7 @@ func (s *ConsumerSuite) TestTerminateWithoutRelease(c *C) {
 	// Termination is supposed to commit the active claims without releasing the partition
 	c.Assert(s.cn.tryClaimPartition(0), Equals, true)
 	c.Assert(s.cn.Terminate(false), Equals, true)
-	// Shouldn't release the claim
+	// Shouldn't release the partition
 	c.Assert(s.m.GetPartitionClaim(s.cn.topic, 0).LastHeartbeat, Not(Equals), int64(0))
 }
 
