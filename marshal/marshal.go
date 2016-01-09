@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"sync/atomic"
 	"time"
 
 	"github.com/optiopay/kafka"
@@ -96,7 +95,7 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 
 	// Now start the metadata refreshing goroutine
 	go func() {
-		for atomic.LoadInt32(ws.quit) != 1 {
+		for !ws.Terminated() {
 			time.Sleep(<-ws.jitters)
 			log.Infof("Refreshing topic metadata.")
 			ws.refreshMetadata()
