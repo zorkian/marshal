@@ -84,6 +84,11 @@ type Consumer struct {
 // separate consumer for every individual topic that you want to consume from. Please
 // see the documentation on ConsumerBehavior.
 func (m *Marshaler) NewConsumer(topicName string, options ConsumerOptions) (*Consumer, error) {
+	// Do not allow construction post-termination
+	if m.Terminated() {
+		return nil, errors.New("Marshaler has terminated, no new consumers can be created")
+	}
+
 	// Ensure the user hasn't set a claim limit and put us into topic mode
 	if options.ClaimEntireTopic && options.MaximumClaims != 0 {
 		return nil, errors.New("ClaimEntireTopic and MaximumClaims are incompatible options")
@@ -101,6 +106,7 @@ func (m *Marshaler) NewConsumer(topicName string, options ConsumerOptions) (*Con
 		claims:     make(map[int]*claim),
 	}
 	atomic.StoreInt32(c.alive, 1)
+	m.addNewConsumer(c)
 
 	// Fast-reclaim: iterate over existing claims in this topic and see if
 	// any of them look to be ours. Do this before the claim manager kicks off.
@@ -176,7 +182,10 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 	oldClaim, ok := c.claims[partID]
 	if ok && oldClaim != nil {
 		if oldClaim.Claimed() {
-			log.Fatalf("Internal double-claim for %s:%d.", c.topic, partID)
+			log.Errorf("Internal double-claim for %s:%d.", c.topic, partID)
+			log.Errorf("This is a catastrophic error. We're terminating Marshal.")
+			log.Errorf("No further messages will be available. Please restart.")
+			c.marshal.Terminate()
 		}
 	}
 

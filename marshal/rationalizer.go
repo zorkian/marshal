@@ -26,12 +26,15 @@ func (w *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
 }
 
 // consumeFromKafka will start consuming messages from Kafka and writing them to the given
-// channel forever.
+// channel forever. It is important that this method closes the "out" channel when it's done,
+// as that instructs the downstream goroutine to exit.
 func (w *Marshaler) consumeFromKafka(partID int, out chan message, startOldest bool) {
 	var err error
 	var alive bool
 	var offsetFirst, offsetNext int64
 
+	// Try to connect to Kafka. This might sleep a bit and retry since the broker could
+	// be down a bit.
 	retry := &backoff.Backoff{Min: 500 * time.Millisecond, Jitter: true}
 	for ; true; time.Sleep(retry.Duration()) {
 		// Figure out how many messages are in this topic. This can fail if the broker handling
@@ -82,13 +85,7 @@ func (w *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 	}
 
 	// Consume messages forever, or until told to quit.
-	for {
-		if atomic.LoadInt32(w.quit) == 1 {
-			log.Debugf("rationalize[%d]: terminating.", partID)
-			close(out)
-			return
-		}
-
+	for !w.Terminated() {
 		msgb, err := consumer.Consume()
 		if err != nil {
 			// The internal consumer will do a number of retries. If we get an error here,
@@ -148,6 +145,10 @@ func (w *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 			w.rationalizers.Done()
 		}
 	}
+
+	// Inform and close the channel so our downstream goroutine also exits.
+	log.Debugf("rationalize[%d]: terminating.", partID)
+	close(out)
 }
 
 // updateClaim is called whenever we need to adjust a claim structure.
@@ -238,13 +239,12 @@ func (w *Marshaler) handleClaim(msg *msgClaimingPartition) {
 // rationalize is a goroutine that constantly consumes from a given partition of the marshal
 // topic and makes changes to the world state whenever something happens.
 func (w *Marshaler) rationalize(partID int, in <-chan message) { // Might be in over my head.
-	for {
+	for !w.Terminated() {
 		msg, ok := <-in
 		if !ok {
-			log.Debugf("rationalize[%d]: channel closed.", partID)
+			log.Infof("rationalize[%d]: exiting, channel closed", partID)
 			return
 		}
-		log.Debugf("rationalize[%d]: %s", partID, msg.Encode())
 
 		switch msg.Type() {
 		case msgTypeHeartbeat:
@@ -261,4 +261,5 @@ func (w *Marshaler) rationalize(partID int, in <-chan message) { // Might be in 
 		// processed in a predictable way (rather than waiting random times)
 		atomic.AddInt32(w.rsteps, 1)
 	}
+	log.Infof("rationalize[%d]: exiting, Marshaler terminated", partID)
 }

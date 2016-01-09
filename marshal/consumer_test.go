@@ -84,9 +84,26 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m2"))
 	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m3"))
 
-	// TODO: flesh out test, can create a second consumer and then see if it gets any
-	// partitions, etc.
-	// lots of things can be tested.
+	// Get consumer channel for this next test
+	chn := cn.ConsumeChannel()
+
+	// Terminate marshaler, ensure it terminates the consumer
+	s.m.Terminate()
+	c.Assert(s.m.Terminated(), Equals, true)
+	c.Assert(cn.Terminated(), Equals, true)
+
+	// Ensure that the channel has been closed
+	select {
+	case _, ok := <-chn:
+		c.Assert(ok, Equals, false)
+	default:
+		c.Assert(false, Equals, true)
+	}
+
+	// Now ensure we can't create a new consumer
+	cn, err = s.m.NewConsumer("test1", options)
+	c.Assert(cn, IsNil)
+	c.Assert(err, NotNil)
 }
 
 func (s *ConsumerSuite) TestTerminateWithRelease(c *C) {
