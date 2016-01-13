@@ -223,7 +223,7 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 	s.Produce("test16", 0, "m1")
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m1"))
 	s.cn.claims[0].heartbeat()
-	c.Assert(cl.updateOffsets(0), IsNil)
+	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 0)
 
@@ -234,7 +234,7 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m3"))
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m4"))
 	s.cn.claims[0].heartbeat()
-	c.Assert(cl.updateOffsets(1), IsNil)
+	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 1)
 
@@ -243,19 +243,19 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m5"))
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m6"))
 	s.cn.claims[0].heartbeat()
-	c.Assert(cl.updateOffsets(2), IsNil)
+	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.ConsumerVelocity() == cl.PartitionVelocity(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 0)
 
 	// Produce again, falls behind slightly
 	s.Produce("test16", 0, "m7")
-	c.Assert(cl.updateOffsets(3), IsNil)
+	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 1)
 
 	// Still behind
-	c.Assert(cl.updateOffsets(4), IsNil)
+	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 2)
 
@@ -263,7 +263,7 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 	// pass as healthy again
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m7"))
 	s.cn.claims[0].heartbeat()
-	c.Assert(cl.updateOffsets(5), IsNil)
+	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 0)
 }
