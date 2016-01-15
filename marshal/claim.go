@@ -336,7 +336,6 @@ func (c *claim) heartbeat() bool {
 	}
 
 	// Let's update current offset internally to the last processed
-	c.updateCurrentOffsets()
 	c.updateOffsets()
 
 	// Lock held because we use c.offsets and update c.lastHeartbeat below
@@ -521,10 +520,10 @@ func (c *claim) updateOffsets() error {
 		return err
 	}
 
+	c.updateCurrentOffsets()
+
 	c.lock.Lock()
 	defer c.lock.Unlock()
-
-	c.beatCounter = (c.beatCounter + 1) % 10
 
 	// Update the earliest/latest offsets that are presently available within the
 	// partition
@@ -536,6 +535,7 @@ func (c *claim) updateOffsets() error {
 	c.offsetLatestHistory[c.beatCounter] = offsets.Latest
 	c.offsetCurrentHistory[c.beatCounter] = c.offsets.Current
 
+	c.beatCounter = (c.beatCounter + 1) % 10
 	return nil
 }
 
