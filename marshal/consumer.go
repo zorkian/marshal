@@ -194,6 +194,14 @@ func (c *Consumer) tryClaimPartition(partID int) bool {
 	return true
 }
 
+// rndIntn gets a random number.
+func (c *Consumer) rndIntn(n int) int {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	return c.rand.Intn(n)
+}
+
 // claimPartitions actually attempts to claim partitions. If the current consumer is
 // set on aggressive, this will try to claim ALL partitions that are free. Balanced mode
 // will claim a single partition.
@@ -209,7 +217,7 @@ func (c *Consumer) claimPartitions() {
 		return
 	}
 
-	offset := rand.Intn(c.partitions)
+	offset := c.rndIntn(c.partitions)
 	for i := 0; i < c.partitions; i++ {
 		partID := (i + offset) % c.partitions
 
@@ -290,7 +298,7 @@ func (c *Consumer) manageClaims() {
 		// Now sleep a bit so we don't pound things
 		// TODO: Raise this later, we shouldn't attempt to claim this fast, this is just for
 		// development.
-		time.Sleep(time.Duration(rand.Intn(3000)) * time.Millisecond)
+		time.Sleep(time.Duration(c.rndIntn(3000)) * time.Millisecond)
 	}
 }
 

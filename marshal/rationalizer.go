@@ -64,7 +64,8 @@ func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 	// Assume we're starting at the oldest offset for consumption
 	consumerConf := kafka.NewConsumerConf(MarshalTopic, int32(partID))
 	consumerConf.StartOffset = kafka.StartOffsetOldest
-	consumerConf.RequestTimeout = 1 * time.Second
+	consumerConf.RequestTimeout = 10 * time.Millisecond
+	consumerConf.Logger = &optiopayLoggerShim{l: log}
 
 	// Get the offsets of this partition, we're going to arbitrarily pick something that
 	// is ~100,000 from the end if there's more than that. This is only if startOldest is
