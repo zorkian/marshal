@@ -305,17 +305,8 @@ func (c *Consumer) claimPartitions() {
 	}
 }
 
-func (c *Consumer) topicsClaimed() map[string]bool {
-	claimed := make(map[string]bool)
-	for topic, topicClaims := range c.claims {
-		if topicClaims[0].Claimed() {
-			claimed[topic] = true
-		}
-	}
-
-	return claimed
-}
-
+// isTopicClaimReached indicates whether we can claim any partition of this topic
+// or not given the topics we've already claimed and MaximumClaims
 func (c *Consumer) isTopicClaimReached(topic string) bool {
 	if c.options.MaximumClaims <= 0 {
 		return false
@@ -323,7 +314,12 @@ func (c *Consumer) isTopicClaimReached(topic string) bool {
 
 	c.lock.RLock()
 	defer c.lock.RUnlock()
-	claimed := c.topicsClaimed()
+	claimed := make(map[string]bool)
+	for topic, topicClaims := range c.claims {
+		if topicClaims[0].Claimed() {
+			claimed[topic] = true
+		}
+	}
 
 	if !claimed[topic] && len(claimed) >= c.options.MaximumClaims {
 		return true
@@ -358,7 +354,7 @@ func (c *Consumer) claimTopics() {
 			// many (key partition 0) we claim.
 
 			if c.isTopicClaimReached(topic) {
-				log.Debugf("blocked claiming topic: %s due to limit %d\n",
+				log.Infof("blocked claiming topic: %s due to limit %d\n",
 					topic, c.options.MaximumClaims)
 				return
 			}
