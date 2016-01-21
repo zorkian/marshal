@@ -469,8 +469,11 @@ func (c *Consumer) PrintState() {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	log.Infof("  TOPIC: %s [messages queued: %d]", c.topic, len(c.messages))
-	for _, claim := range c.claims {
-		claim.PrintState()
+	log.Infof("  CONSUMER: %d messages in queue", len(c.messages))
+	for _, topic := range c.topics {
+		log.Infof("    TOPIC: %s", topic)
+		for _, claim := range c.claims[topic] {
+			claim.PrintState()
+		}
 	}
 }

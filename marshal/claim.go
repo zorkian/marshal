@@ -572,14 +572,14 @@ func (c *claim) PrintState() {
 
 	now := time.Now().Unix()
 
-	log.Infof("    * %2d [%s]: offsets %d <= %d <= %d | %d",
+	log.Infof("      * %2d [%s]: offsets %d <= %d <= %d | %d",
 		c.partID, state, c.offsets.Earliest, c.offsets.Current,
 		c.offsets.Latest, c.offsets.Committed)
-	log.Infof("                 BC %d | LHB %d (%d) | OM %d | CB %d",
+	log.Infof("                   BC %d | LHB %d (%d) | OM %d | CB %d",
 		c.beatCounter, c.lastHeartbeat, now-c.lastHeartbeat,
 		c.outstandingMessages, c.cyclesBehind)
-	log.Infof("                 TRACK COMMITTED %d | TRACK OUTSTANDING %d",
+	log.Infof("                   TRACK COMMITTED %d | TRACK OUTSTANDING %d",
 		ct, len(c.tracking)-ct)
-	log.Infof("                 PV %0.2f | CV %0.2f",
+	log.Infof("                   PV %0.2f | CV %0.2f",
 		c.PartitionVelocity(), c.ConsumerVelocity())
 }
