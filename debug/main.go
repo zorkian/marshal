@@ -12,8 +12,8 @@ import (
 	"flag"
 	"time"
 
+	"github.com/dropbox/marshal/marshal"
 	"github.com/op/go-logging"
-	"github.com/zorkian/marshal/marshal"
 )
 
 var log = logging.MustGetLogger("MarshalDebug")

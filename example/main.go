@@ -5,8 +5,8 @@
 package main
 
 import (
+	"github.com/dropbox/marshal/marshal"
 	"github.com/op/go-logging"
-	"github.com/zorkian/marshal/marshal"
 )
 
 func main() {
