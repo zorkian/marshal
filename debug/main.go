@@ -75,7 +75,7 @@ func main() {
 		var c *marshal.Consumer
 		timeIt("construct Consumer", func() {
 			var err error
-			c, err = m.NewConsumer(*topic, options)
+			c, err = m.NewConsumer([]string{*topic}, options)
 			if err != nil {
 				log.Fatalf("Failed to construct consumer: %s", err)
 			}
