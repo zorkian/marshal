@@ -184,7 +184,7 @@ func (c *Consumer) defaultTopicPartitions() int {
 func (c *Consumer) tryClaimPartition(topic string, partID int) bool {
 
 	if c.options.ClaimEntireTopic {
-		if c.isTopicClaimReached(topic) {
+		if c.isTopicClaimLimitReached(topic) {
 			return false
 		}
 	} else {
@@ -305,9 +305,9 @@ func (c *Consumer) claimPartitions() {
 	}
 }
 
-// isTopicClaimReached indicates whether we can claim any partition of this topic
+// isTopicClaimLimitReached indicates whether we can claim any partition of this topic
 // or not given the topics we've already claimed and MaximumClaims
-func (c *Consumer) isTopicClaimReached(topic string) bool {
+func (c *Consumer) isTopicClaimLimitReached(topic string) bool {
 	if c.options.MaximumClaims <= 0 {
 		return false
 	}
@@ -353,7 +353,7 @@ func (c *Consumer) claimTopics() {
 			// of their partitions to be claimed. This is controlled by controlling how
 			// many (key partition 0) we claim.
 
-			if c.isTopicClaimReached(topic) {
+			if c.isTopicClaimLimitReached(topic) {
 				log.Infof("blocked claiming topic: %s due to limit %d\n",
 					topic, c.options.MaximumClaims)
 				return
