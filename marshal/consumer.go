@@ -316,7 +316,7 @@ func (c *Consumer) isTopicClaimLimitReached(topic string) bool {
 	defer c.lock.RUnlock()
 	claimed := make(map[string]bool)
 	for topic, topicClaims := range c.claims {
-		if topicClaims[0].Claimed() {
+		if claim, ok := topicClaims[0]; ok && claim.Claimed() {
 			claimed[topic] = true
 		}
 	}
