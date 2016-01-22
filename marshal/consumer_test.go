@@ -257,12 +257,25 @@ func (s *ConsumerSuite) TestMultiTopicClaimWithLimit(c *C) {
 	topics := []string{"test1", "test2", "test16"}
 	cn := s.NewTestConsumer(s.m, topics)
 	cn.options.ClaimEntireTopic = true
-	cn.options.MaximumClaims = 7
+	cn.options.MaximumClaims = 2
 	defer cn.Terminate(true)
 
 	// Force our consumer to run it's topic claim loop so we know it has run
 	cn.claimTopics()
-	c.Assert(cn.getNumActiveClaims(), Equals, 7)
+
+	// the order of claiming is not deterministic. We will claim exactly 2 of the 3 topics
+	// but we don't know which ones they are
+	for i := 0; i+1 < len(topics); i++ {
+		for j := i + 1; j < len(topics); j++ {
+			claimed := s.m.Partitions(topics[i]) + s.m.Partitions(topics[j])
+			if claimed == cn.getNumActiveClaims() {
+				return
+			}
+		}
+	}
+
+	// we should have matched the exact number of active partitions
+	c.Assert(true, Equals, false)
 }
 
 func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
