@@ -5,7 +5,7 @@ import (
 
 	. "gopkg.in/check.v1"
 
-	"github.com/optiopay/kafka/kafkatest"
+	"github.com/dropbox/kafka/kafkatest"
 )
 
 var _ = Suite(&MarshalSuite{})
