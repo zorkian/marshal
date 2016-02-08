@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/optiopay/kafka/proto"
+	"github.com/dropbox/kafka/proto"
 )
 
 // ConsumerOptions represents all of the options that a consumer can be configured with.

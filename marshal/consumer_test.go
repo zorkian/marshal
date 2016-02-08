@@ -1,14 +1,16 @@
 package marshal
 
 import (
-	"github.com/optiopay/kafka/kafkatest"
-	"github.com/optiopay/kafka/proto"
-	. "gopkg.in/check.v1"
 	"math/rand"
 	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	. "gopkg.in/check.v1"
+
+	"github.com/dropbox/kafka/kafkatest"
+	"github.com/dropbox/kafka/proto"
 )
 
 var _ = Suite(&ConsumerSuite{})
@@ -465,7 +467,9 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// Consume the first two messages from 0, then heartbeat to set the offset to 2
 	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("m1"))
 	c.Assert(cn1.consumeOne().Value, DeepEquals, []byte("m2"))
+	cn1.lock.Lock()
 	c.Assert(cn1.claims["test2"][0].heartbeat(), Equals, true)
+	cn1.lock.Unlock()
 	c.Assert(s.m.waitForRsteps(5), Equals, 5)
 
 	// Now add some messages to the next, but only consume some

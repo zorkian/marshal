@@ -14,7 +14,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/optiopay/kafka"
+	"github.com/dropbox/kafka"
 )
 
 const (
@@ -36,7 +36,6 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 	// requests from N clients/groups. For now, though, we require instantiating a new
 	// marshaler for every client/group.
 	brokerConf := kafka.NewBrokerConf("PortalMarshal")
-	brokerConf.Logger = &optiopayLoggerShim{l: log}
 	broker, err := kafka.Dial(brokers, brokerConf)
 	if err != nil {
 		return nil, err
