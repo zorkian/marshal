@@ -16,34 +16,10 @@ import (
 	"github.com/op/go-logging"
 )
 
-type logger struct {
-	l *logging.Logger
-}
-
-func (l *logger) Errorf(format string, args ...interface{}) {
-	l.l.Error(format, args...)
-}
-
-func (l *logger) Warningf(format string, args ...interface{}) {
-	l.l.Warning(format, args...)
-}
-
-func (l *logger) Infof(format string, args ...interface{}) {
-	l.l.Info(format, args...)
-}
-
-func (l *logger) Debugf(format string, args ...interface{}) {
-	l.l.Debug(format, args...)
-}
-
-func (l *logger) Fatalf(format string, args ...interface{}) {
-	l.l.Fatalf(format, args...)
-}
-
 // optiopayLoggerShim is a translation layer between what the optiopay library expects and what
 // we provide so all the logging ends up in one nice place.
 type optiopayLoggerShim struct {
-	l *logger
+	l *logging.Logger
 }
 
 // toString is because of the formatting that the optiopay library uses, this condenses it to a
@@ -77,9 +53,9 @@ func (l *optiopayLoggerShim) Debug(format string, args ...interface{}) {
 	l.l.Debugf(l.toString(format, args...))
 }
 
-var log *logger
+var log *logging.Logger
 
 func init() {
-	log = &logger{l: logging.MustGetLogger("KafkaMarshal")}
+	log = logging.MustGetLogger("KafkaMarshal")
 	logging.SetLevel(logging.INFO, "KafkaMarshal")
 }
