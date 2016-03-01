@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"fmt"
 	"github.com/dropbox/kafka/proto"
 )
 
@@ -79,6 +80,9 @@ type Consumer struct {
 	// access to this map.
 	lock   sync.RWMutex
 	claims map[string]map[int]*claim
+	// caches the claimed topics
+	claimedTopics   map[string]bool
+	topicClaimsChan chan map[string]bool
 }
 
 // NewConsumer instantiates a consumer object for a given topic. You must create a
@@ -103,14 +107,16 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 
 	// Construct base structure
 	c := &Consumer{
-		alive:      new(int32),
-		marshal:    m,
-		topics:     topicNames,
-		partitions: partitions,
-		options:    options,
-		messages:   make(chan *proto.Message, 10000),
-		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		claims:     make(map[string]map[int]*claim),
+		alive:           new(int32),
+		marshal:         m,
+		topics:          topicNames,
+		partitions:      partitions,
+		options:         options,
+		messages:        make(chan *proto.Message, 10000),
+		rand:            rand.New(rand.NewSource(time.Now().UnixNano())),
+		claims:          make(map[string]map[int]*claim),
+		claimedTopics:   make(map[string]bool),
+		topicClaimsChan: make(chan map[string]bool, 1),
 	}
 	atomic.StoreInt32(c.alive, 1)
 	m.addNewConsumer(c)
@@ -132,8 +138,17 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 					}
 					c.claims[topic][partID] = newClaim(
 						topic, partID, c.marshal, c.messages, options)
+
+					// update topic claims
+					if options.ClaimEntireTopic && partID == 0 {
+						c.claimedTopics[topic] = true
+					}
 				}
 			}
+		}
+		// send topic claim notification
+		if options.ClaimEntireTopic {
+			c.topicClaimsChan <- c.claimedTopics
 		}
 	}
 
@@ -331,6 +346,8 @@ func (c *Consumer) isTopicClaimLimitReached(topic string) bool {
 // as the key, anybody who has that partition has claimed the entire topic. This requires all
 // consumers to use this mode.
 func (c *Consumer) claimTopics() {
+	latestClaims := make(map[string]bool)
+
 	for topic, partitions := range c.partitions {
 		if partitions <= 0 {
 			continue
@@ -345,6 +362,7 @@ func (c *Consumer) claimTopics() {
 				lastClaim.ClientID != c.marshal.clientID {
 				continue
 			}
+			latestClaims[topic] = true
 		} else {
 			// Unclaimed, so attempt to claim partition 0. This is how we key topic claims.
 			log.Infof("[%s] attempting to claim topic (key partition 0)\n", topic)
@@ -356,13 +374,14 @@ func (c *Consumer) claimTopics() {
 			if c.isTopicClaimLimitReached(topic) {
 				log.Infof("blocked claiming topic: %s due to limit %d\n",
 					topic, c.options.MaximumClaims)
-				return
+				continue
 			}
 
 			if !c.tryClaimPartition(topic, 0) {
 				continue
 			}
 			log.Infof("[%s] claimed topic (key partition 0) successfully\n", topic)
+			latestClaims[topic] = true
 		}
 
 		// We either just claimed or we have already owned the 0th partition. Let's iterate
@@ -373,6 +392,35 @@ func (c *Consumer) claimTopics() {
 				c.tryClaimPartition(topic, partID)
 			}
 		}
+	}
+
+	// let's compare the new topic claims vs old ones. Upon change, we should trigger an update
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	changed := false
+	// check for missing topic claims
+	for topic := range c.claimedTopics {
+		if !latestClaims[topic] {
+			changed = true
+			break
+		}
+	}
+	// check for new topic claims
+	if !changed && len(latestClaims) != len(c.claimedTopics) {
+		changed = true
+	}
+
+	if changed {
+		c.lock.RUnlock()
+		c.lock.Lock()
+		c.claimedTopics = latestClaims
+		c.lock.Unlock()
+		c.lock.RLock()
+		select {
+		case <-c.topicClaimsChan:
+		default:
+		}
+		c.topicClaimsChan <- c.claimedTopics
 	}
 
 }
@@ -412,11 +460,14 @@ func (c *Consumer) Terminate(release bool) bool {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	for _, topicClaims := range c.claims {
-		for _, claim := range topicClaims {
+	for topic, topicClaims := range c.claims {
+		for partId, claim := range topicClaims {
 			if claim != nil {
 				if release {
 					claim.Release()
+					if partId == 0 {
+						delete(c.claimedTopics, topic)
+					}
 				} else {
 					claim.Terminate()
 				}
@@ -425,7 +476,45 @@ func (c *Consumer) Terminate(release bool) bool {
 	}
 
 	close(c.messages)
+
+	// update the claims
+	select {
+	case <-c.topicClaimsChan:
+	default:
+	}
+	c.topicClaimsChan <- c.claimedTopics
+	close(c.topicClaimsChan)
 	return true
+}
+
+// GetCurrentTopicClaims returns the topics that are currently claimed by this
+// consumer. It should be relevent only when ClaimEntireTopic is set
+func (c *Consumer) GetCurrentTopicClaims() (map[string]bool, error) {
+	if !c.options.ClaimEntireTopic {
+		err := fmt.Errorf("GetCurrentTopicClaims is only relevent when ClaimEntireTopic is set")
+		log.Error(err.Error())
+		return nil, err
+	}
+
+	c.lock.RLock()
+	defer c.lock.RLock()
+
+	// do a copy
+	latestClaims := make(map[string]bool)
+	for topic := range c.claimedTopics {
+		latestClaims[topic] = true
+	}
+
+	return latestClaims, nil
+}
+
+func (c *Consumer) TopicClaims() <-chan map[string]bool {
+	if !c.options.ClaimEntireTopic {
+		err := fmt.Errorf("GetCurrentTopicClaims is only relevent when ClaimEntireTopic is set")
+		log.Error(err.Error())
+	}
+
+	return c.topicClaimsChan
 }
 
 // GetCurrentLag returns the number of messages that this consumer is lagging by. Note that

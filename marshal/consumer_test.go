@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,14 +26,16 @@ type ConsumerSuite struct {
 
 func (s *ConsumerSuite) NewTestConsumer(m *Marshaler, topics []string) *Consumer {
 	cn := &Consumer{
-		alive:      new(int32),
-		marshal:    m,
-		topics:     topics,
-		options:    NewConsumerOptions(),
-		partitions: make(map[string]int),
-		rand:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		claims:     make(map[string]map[int]*claim),
-		messages:   make(chan *proto.Message, 1000),
+		alive:           new(int32),
+		marshal:         m,
+		topics:          topics,
+		options:         NewConsumerOptions(),
+		partitions:      make(map[string]int),
+		rand:            rand.New(rand.NewSource(time.Now().UnixNano())),
+		claims:          make(map[string]map[int]*claim),
+		messages:        make(chan *proto.Message, 1000),
+		claimedTopics:   make(map[string]bool),
+		topicClaimsChan: make(chan map[string]bool, 1),
 	}
 
 	for _, topic := range topics {
@@ -175,7 +178,16 @@ func (s *ConsumerSuite) TestTopicClaimBlocked(c *C) {
 	// Claim an entire topic, this creates a real consumer
 	cn := s.NewTestConsumer(s.m2, []string{topic})
 	cn.options.ClaimEntireTopic = true
-	defer cn.Terminate(true)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case claimedTopics := <-cn.TopicClaims():
+			c.Assert(len(claimedTopics), Equals, 1)
+			break
+		}
+	}()
 
 	// Force our consumer to run it's topic claim loop so we know it has run
 	cn.claimTopics()
@@ -196,6 +208,28 @@ func (s *ConsumerSuite) TestTopicClaimBlocked(c *C) {
 	cn.claimTopics()
 	c.Assert(cnbl.getNumActiveClaims(), Equals, 0)
 	c.Assert(cn.getNumActiveClaims(), Equals, 2)
+	claimedTopics, err := cn.GetCurrentTopicClaims()
+	c.Assert(err, IsNil)
+	c.Assert(claimedTopics[topic], Equals, true)
+	c.Assert(len(claimedTopics), Equals, 1)
+	wg.Wait()
+
+	// let's release the topic and make sure the claimed topics get updated too
+	cn.Terminate(true)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case claimedTopics := <-cn.TopicClaims():
+			c.Assert(len(claimedTopics), Equals, 0)
+			break
+		}
+	}()
+	wg.Wait()
+	claimedTopics, err = cn.GetCurrentTopicClaims()
+	c.Assert(err, IsNil)
+	c.Assert(claimedTopics[topic], Equals, false)
+	c.Assert(len(claimedTopics), Equals, 0)
 }
 
 func (s *ConsumerSuite) TestTopicClaimPartial(c *C) {
@@ -242,6 +276,16 @@ func (s *ConsumerSuite) TestMultiTopicClaim(c *C) {
 	cn := s.NewTestConsumer(s.m, topics)
 	cn.options.ClaimEntireTopic = true
 	defer cn.Terminate(true)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case claimedTopics := <-cn.TopicClaims():
+			c.Assert(len(claimedTopics), Equals, len(topics))
+			break
+		}
+	}()
 
 	// Force our consumer to run it's topic claim loop so we know it has run
 	cn.claimTopics()
@@ -251,7 +295,12 @@ func (s *ConsumerSuite) TestMultiTopicClaim(c *C) {
 	for _, topic := range topics {
 		partitions += s.m.Partitions(topic)
 	}
+
+	claimedTopics, err := cn.GetCurrentTopicClaims()
+	c.Assert(err, IsNil)
 	c.Assert(cn.getNumActiveClaims(), Equals, partitions)
+	c.Assert(len(claimedTopics), Equals, len(topics))
+	wg.Wait()
 }
 
 func (s *ConsumerSuite) TestMultiTopicClaimWithLimit(c *C) {
@@ -271,6 +320,10 @@ func (s *ConsumerSuite) TestMultiTopicClaimWithLimit(c *C) {
 		for j := i + 1; j < len(topics); j++ {
 			claimed := s.m.Partitions(topics[i]) + s.m.Partitions(topics[j])
 			if claimed == cn.getNumActiveClaims() {
+				// let's also make sure that the length of claimed topics is correct
+				claimedTopics, err := cn.GetCurrentTopicClaims()
+				c.Assert(err, IsNil)
+				c.Assert(len(claimedTopics), Equals, 2)
 				return
 			}
 		}
