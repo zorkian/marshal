@@ -10,12 +10,12 @@ package marshal
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"fmt"
 	"github.com/dropbox/kafka/proto"
 )
 
@@ -147,8 +147,12 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 			}
 		}
 		// send topic claim notification
-		if options.ClaimEntireTopic {
-			c.topicClaimsChan <- c.claimedTopics
+		if options.ClaimEntireTopic && len(c.claimedTopics) > 0 {
+			claimedTopics := make(map[string]bool)
+			for topic := range c.claimedTopics {
+				claimedTopics[topic] = true
+			}
+			c.topicClaimsChan <- claimedTopics
 		}
 	}
 
@@ -394,9 +398,17 @@ func (c *Consumer) claimTopics() {
 		}
 	}
 
-	// let's compare the new topic claims vs old ones. Upon change, we should trigger an update
 	c.lock.RLock()
 	defer c.lock.RUnlock()
+	if !c.Terminated() {
+		// let's compare the new topic claims vs old ones. Upon change, we should trigger an update
+		c.updateTopicClaims(latestClaims)
+	}
+}
+
+// updatesTopicClaims if changed. It should be noted that it expects c.lock.RLock
+// to be already acquired
+func (c *Consumer) updateTopicClaims(latestClaims map[string]bool) {
 	changed := false
 	// check for missing topic claims
 	for topic := range c.claimedTopics {
@@ -412,9 +424,11 @@ func (c *Consumer) claimTopics() {
 
 	if changed {
 		c.lock.RUnlock()
-		c.lock.Lock()
-		c.claimedTopics = latestClaims
-		c.lock.Unlock()
+		func() {
+			c.lock.Lock()
+			c.claimedTopics = latestClaims
+			c.lock.Unlock()
+		}()
 		c.lock.RLock()
 		select {
 		case <-c.topicClaimsChan:
@@ -422,7 +436,6 @@ func (c *Consumer) claimTopics() {
 		}
 		c.topicClaimsChan <- c.claimedTopics
 	}
-
 }
 
 // manageClaims is our internal state machine that handles partitions and claiming new
@@ -457,6 +470,8 @@ func (c *Consumer) Terminate(release bool) bool {
 		return false
 	}
 
+	latestTopicClaims := make(map[string]bool)
+	releasedTopics := make(map[string]bool)
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
@@ -466,7 +481,7 @@ func (c *Consumer) Terminate(release bool) bool {
 				if release {
 					claim.Release()
 					if partId == 0 {
-						delete(c.claimedTopics, topic)
+						releasedTopics[topic] = true
 					}
 				} else {
 					claim.Terminate()
@@ -477,12 +492,14 @@ func (c *Consumer) Terminate(release bool) bool {
 
 	close(c.messages)
 
-	// update the claims
-	select {
-	case <-c.topicClaimsChan:
-	default:
+	for topic := range c.claims {
+		if !releasedTopics[topic] {
+			latestTopicClaims[topic] = true
+		}
 	}
-	c.topicClaimsChan <- c.claimedTopics
+
+	// update the claims
+	c.updateTopicClaims(latestTopicClaims)
 	close(c.topicClaimsChan)
 	return true
 }
