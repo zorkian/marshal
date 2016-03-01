@@ -398,9 +398,9 @@ func (c *Consumer) claimTopics() {
 		}
 	}
 
-	c.lock.RLock()
-	defer c.lock.RUnlock()
 	if !c.Terminated() {
+		c.lock.RLock()
+		defer c.lock.RUnlock()
 		// let's compare the new topic claims vs old ones. Upon change, we should trigger an update
 		c.updateTopicClaims(latestClaims)
 	}
