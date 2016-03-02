@@ -148,11 +148,7 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 		}
 		// send topic claim notification
 		if options.ClaimEntireTopic && len(c.claimedTopics) > 0 {
-			claimedTopics := make(map[string]bool)
-			for topic := range c.claimedTopics {
-				claimedTopics[topic] = true
-			}
-			c.topicClaimsChan <- claimedTopics
+			c.updateTopicClaims(c.claimedTopics)
 		}
 	}
 
@@ -175,7 +171,7 @@ func (c *Consumer) defaultTopic() string {
 		log.Fatalf("attempted to claim partitions for more than one topic")
 	}
 
-	for topic, _ := range c.partitions {
+	for topic := range c.partitions {
 		return topic
 	}
 
@@ -424,17 +420,19 @@ func (c *Consumer) updateTopicClaims(latestClaims map[string]bool) {
 
 	if changed {
 		c.lock.RUnlock()
+		defer c.lock.RLock()
 		func() {
+			// make sure that draining the channel and writing to it
+			// happens in the same atomic operation
 			c.lock.Lock()
+			defer c.lock.Unlock()
 			c.claimedTopics = latestClaims
-			c.lock.Unlock()
+			select {
+			case <-c.topicClaimsChan:
+			default:
+			}
+			c.topicClaimsChan <- c.claimedTopics
 		}()
-		c.lock.RLock()
-		select {
-		case <-c.topicClaimsChan:
-		default:
-		}
-		c.topicClaimsChan <- c.claimedTopics
 	}
 }
 
@@ -476,11 +474,11 @@ func (c *Consumer) Terminate(release bool) bool {
 	defer c.lock.RUnlock()
 
 	for topic, topicClaims := range c.claims {
-		for partId, claim := range topicClaims {
+		for partID, claim := range topicClaims {
 			if claim != nil {
 				if release {
 					claim.Release()
-					if partId == 0 {
+					if partID == 0 {
 						releasedTopics[topic] = true
 					}
 				} else {
@@ -525,9 +523,11 @@ func (c *Consumer) GetCurrentTopicClaims() (map[string]bool, error) {
 	return latestClaims, nil
 }
 
+// TopicClaims returns a read-only channel that receives updates for topic claims.
+// It's only relevant when CLaimEntireTopic is set
 func (c *Consumer) TopicClaims() <-chan map[string]bool {
 	if !c.options.ClaimEntireTopic {
-		err := fmt.Errorf("GetCurrentTopicClaims is only relevent when ClaimEntireTopic is set")
+		err := fmt.Errorf("GetCurrentTopicClaims is only relevant when ClaimEntireTopic is set")
 		log.Error(err.Error())
 	}
 
