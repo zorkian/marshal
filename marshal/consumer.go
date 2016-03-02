@@ -149,9 +149,9 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 		// send topic claim notification
 		if options.ClaimEntireTopic && len(c.claimedTopics) > 0 {
 			c.lock.RLock()
+			defer c.lock.RUnlock()
 			// updateTopicClaims expects to be called with RLock held
 			c.updateTopicClaims(c.claimedTopics)
-			c.lock.RUnlock()
 		}
 	}
 
@@ -517,7 +517,7 @@ func (c *Consumer) GetCurrentTopicClaims() (map[string]bool, error) {
 	}
 
 	c.lock.RLock()
-	defer c.lock.RLock()
+	defer c.lock.RUnlock()
 
 	// do a copy
 	latestClaims := make(map[string]bool)
