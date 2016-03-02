@@ -78,7 +78,9 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	s.cl.lock.RLock()
 	c.Assert(s.cl.tracking[0], Equals, false)
+	s.cl.lock.RUnlock()
 
 	// Consume 2, still 0
 	msg2 := s.consumeOne(c)
