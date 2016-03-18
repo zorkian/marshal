@@ -100,12 +100,11 @@ func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error
 			log.Infof("Refreshing topic metadata.")
 			m.refreshMetadata()
 
-			// See if the number of partitions in the marshal topic went up. If so, this is a
-			// fatal error as it means we lose coordination. In theory a mass die-off of workers
-			// is bad, but so is upsharding the coordination topic without shutting down
-			// everything. At least this limits the damage horizon?
+			// See if the number of partitions in the marshal topic changed. This is bad if
+			// it happens, since it means we can no longer coordinate correctly.
 			if m.Partitions(MarshalTopic) != m.partitions {
-				log.Fatalf("Marshal topic partition count changed. FATAL!")
+				log.Errorf("Marshal topic partition count changed. Terminating!")
+				m.Terminate()
 			}
 		}
 	}()
