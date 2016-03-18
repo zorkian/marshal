@@ -33,6 +33,12 @@ func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 	var alive bool
 	var offsetFirst, offsetNext int64
 
+	// Exit logic -- make sure downstream knows we exited.
+	defer func() {
+		log.Debugf("rationalize[%d]: terminating.", partID)
+		close(out)
+	}()
+
 	// Try to connect to Kafka. This might sleep a bit and retry since the broker could
 	// be down a bit.
 	retry := &backoff.Backoff{Min: 500 * time.Millisecond, Jitter: true}
@@ -79,9 +85,11 @@ func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 
 	consumer, err := m.kafka.Consumer(consumerConf)
 	if err != nil {
-		// Unfortunately this is a fatal error, as without being able to consume this partition
+		// Unfortunately this is a termination error, as without being able to consume this partition
 		// we can't effectively rationalize.
-		log.Fatalf("rationalize[%d]: Failed to create consumer: %s", partID, err)
+		log.Errorf("rationalize[%d]: Failed to create consumer: %s", partID, err)
+		m.Terminate()
+		return
 	}
 
 	// Consume messages forever, or until told to quit.
@@ -145,10 +153,6 @@ func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 			m.rationalizers.Done()
 		}
 	}
-
-	// Inform and close the channel so our downstream goroutine also exits.
-	log.Debugf("rationalize[%d]: terminating.", partID)
-	close(out)
 }
 
 // updateClaim is called whenever we need to adjust a claim structure.

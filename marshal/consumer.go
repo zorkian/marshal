@@ -171,27 +171,33 @@ func NewConsumerOptions() ConsumerOptions {
 
 func (c *Consumer) defaultTopic() string {
 	if len(c.partitions) > 1 {
-		log.Fatalf("attempted to claim partitions for more than one topic")
+		log.Errorf("attempted to claim partitions for more than one topic")
+		c.Terminate(false)
+		return ""
 	}
 
 	for topic := range c.partitions {
 		return topic
 	}
 
-	log.Fatalf("couldn't find default topic!")
+	log.Errorf("couldn't find default topic!")
+	c.Terminate(false)
 	return ""
 }
 
 func (c *Consumer) defaultTopicPartitions() int {
 	if len(c.partitions) > 1 {
-		log.Fatalf("attempted to claim partitions for more than one topic")
+		log.Errorf("attempted to claim partitions for more than one topic")
+		c.Terminate(false)
+		return 0
 	}
 
 	for _, partitions := range c.partitions {
 		return partitions
 	}
 
-	log.Fatalf("couldn't find default topic!")
+	log.Errorf("couldn't find default topic!")
+	c.Terminate(false)
 	return 0
 }
 
@@ -246,7 +252,6 @@ func (c *Consumer) tryClaimPartition(topic string, partID int) bool {
 		oldClaim, ok := topicClaims[partID]
 		if ok && oldClaim != nil {
 			if oldClaim.Claimed() {
-				log.Fatalf("Internal double-claim for %s:%d.", topic, partID)
 				log.Errorf("Internal double-claim for %s:%d.", topic, partID)
 				log.Errorf("This is a catastrophic error. We're terminating Marshal.")
 				log.Errorf("No further messages will be available. Please restart.")
@@ -278,7 +283,9 @@ func (c *Consumer) rndIntn(n int) int {
 // will claim a single partition.
 func (c *Consumer) claimPartitions() {
 	if len(c.partitions) > 1 {
-		log.Fatalf("attempted to claim partitions for more than a single topic")
+		log.Errorf("attempted to claim partitions for more than a single topic")
+		c.Terminate(false)
+		return
 	}
 
 	topic := c.defaultTopic()
