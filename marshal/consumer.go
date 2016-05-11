@@ -151,7 +151,7 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 			c.lock.RLock()
 			defer c.lock.RUnlock()
 			// updateTopicClaims expects to be called with RLock held
-			c.updateTopicClaims(c.claimedTopics)
+			c.updateTopicClaims(c.claimedTopics, true)
 		}
 	}
 
@@ -409,24 +409,35 @@ func (c *Consumer) claimTopics() {
 		defer c.lock.RUnlock()
 		// let's compare the new topic claims vs old ones. Upon change, we should trigger an update
 		// updateTopicClaims expects to be called with RLock held
-		c.updateTopicClaims(latestClaims)
+		c.updateTopicClaims(latestClaims, false)
 	}
 }
 
 // updatesTopicClaims if changed. It should be noted that it expects c.lock.RLock
 // to be already acquired
-func (c *Consumer) updateTopicClaims(latestClaims map[string]bool) {
+func (c *Consumer) updateTopicClaims(latestClaims map[string]bool, force bool) {
 	changed := false
-	// check for missing topic claims
-	for topic := range c.claimedTopics {
-		if !latestClaims[topic] {
-			changed = true
-			break
-		}
-	}
-	// check for new topic claims
-	if !changed && len(latestClaims) != len(c.claimedTopics) {
+	if force {
 		changed = true
+	} else {
+		// check for missing topic claims
+		for topic := range c.claimedTopics {
+			if !latestClaims[topic] {
+				changed = true
+				break
+			}
+		}
+
+		if !changed {
+			// let's check if something in latest that is not in claimedTopics.
+			// checking for length only is not sufficient
+			for topic := range latestClaims {
+				if !c.claimedTopics[topic] {
+					changed = true
+					break
+				}
+			}
+		}
 	}
 
 	if changed {
@@ -509,7 +520,7 @@ func (c *Consumer) Terminate(release bool) bool {
 
 	// update the claims
 	// updateTopicClaims expects to be called with RLock held
-	c.updateTopicClaims(latestTopicClaims)
+	c.updateTopicClaims(latestTopicClaims, false)
 	close(c.topicClaimsChan)
 	return true
 }
