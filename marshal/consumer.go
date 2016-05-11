@@ -615,14 +615,17 @@ func (c *Consumer) consumeOne() *proto.Message {
 // consumption, as the commit happens in the Consume phase.
 // TODO: AMO description is wrong.
 func (c *Consumer) Commit(msg *proto.Message) error {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+	cl, ok := func() (*claim, bool) {
+		c.lock.RLock()
+		defer c.lock.RUnlock()
 
-	claim, ok := c.claims[msg.Topic][int(msg.Partition)]
+		cl, ok := c.claims[msg.Topic][int(msg.Partition)]
+		return cl, ok
+	}()
 	if !ok {
 		return errors.New("Message not committed (partition claim expired).")
 	}
-	return claim.Commit(msg)
+	return cl.Commit(msg)
 }
 
 // PrintState outputs the status of the consumer.

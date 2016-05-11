@@ -153,6 +153,11 @@ func (c *claim) setup() {
 	// Set up Kafka consumer
 	consumerConf := kafka.NewConsumerConf(c.topic, int32(c.partID))
 	consumerConf.StartOffset = c.offsets.Current
+	// Long-poll fetch for a few seconds. This balances the QPS against Kafka with the
+	// number of connections we have to tie up.
+	consumerConf.RequestTimeout = 3 * time.Second
+	// Do not retry. If we get back no data, we'll do our own retries.
+	consumerConf.RetryLimit = 0
 	kafkaConsumer, err := c.marshal.kafka.Consumer(consumerConf)
 	if err != nil {
 		log.Errorf("[%s:%d] consumer failed to create Kafka Consumer: %s",
@@ -287,6 +292,9 @@ func (c *claim) messagePump() {
 				c.topic, c.partID)
 			go c.Release()
 			return
+		} else if err == kafka.ErrNoData {
+			// Do nothing and retry.
+			continue
 		} else if err != nil {
 			log.Errorf("[%s:%d] error consuming: %s", c.topic, c.partID, err)
 
