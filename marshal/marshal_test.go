@@ -56,11 +56,11 @@ func (s *MarshalSuite) TestNewMarshaler(c *C) {
 
 	// If our hash algorithm changes, these values will have to change. This tests the low
 	// level hash function.
-	c.Assert(s.m.getClaimPartition("test1"), Equals, 2)
-	c.Assert(s.m.getClaimPartition("test2"), Equals, 1)
-	c.Assert(s.m.getClaimPartition("test16"), Equals, 0)
-	c.Assert(s.m.getClaimPartition("unknown"), Equals, 1)
-	c.Assert(s.m.getClaimPartition("unknown"), Equals, 1) // Twice on purpose.
+	c.Assert(s.m.cluster.getClaimPartition("test1"), Equals, 2)
+	c.Assert(s.m.cluster.getClaimPartition("test2"), Equals, 1)
+	c.Assert(s.m.cluster.getClaimPartition("test16"), Equals, 0)
+	c.Assert(s.m.cluster.getClaimPartition("unknown"), Equals, 1)
+	c.Assert(s.m.cluster.getClaimPartition("unknown"), Equals, 1) // Twice on purpose.
 }
 
 // This is a full integration test of claiming including writing to Kafka via the marshaler
@@ -80,28 +80,28 @@ func (s *MarshalSuite) TestClaimPartitionIntegration(c *C) {
 	select {
 	case out := <-resp:
 		c.Assert(out, Equals, true)
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		c.Error("Timed out claiming partition")
 	}
 
 	select {
 	case out := <-resp:
 		c.Assert(out, Equals, true)
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		c.Error("Timed out claiming partition")
 	}
 
 	select {
 	case out := <-resp:
 		c.Assert(out, Equals, false)
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		c.Error("Timed out claiming partition")
 	}
 
 	select {
 	case out := <-resp:
 		c.Assert(out, Equals, true)
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		c.Error("Timed out claiming partition")
 	}
 }
@@ -111,12 +111,12 @@ func (s *MarshalSuite) TestPartitionLifecycleIntegration(c *C) {
 	// Claim partition (this is synchronous, will only return when)
 	// it has succeeded
 	c.Assert(s.m.ClaimPartition("test1", 0), Equals, true)
-	c.Assert(s.m.waitForRsteps(0), Equals, 1)
+	c.Assert(s.m.cluster.waitForRsteps(1), Equals, 1)
 
 	// Ensure we have claimed it
 	cl := s.m.GetPartitionClaim("test1", 0)
 	if cl.LastHeartbeat <= 0 || cl.ClientID != "cl" || cl.GroupID != "gr" {
-		c.Error("PartitionClaim values unexpected")
+		c.Errorf("PartitionClaim values unexpected %+v", cl)
 	}
 	if cl.LastOffset != 0 {
 		c.Error("LastOffset is not 0")
@@ -124,12 +124,12 @@ func (s *MarshalSuite) TestPartitionLifecycleIntegration(c *C) {
 
 	// Now heartbeat on it to update the last offset
 	c.Assert(s.m.Heartbeat("test1", 0, 10), IsNil)
-	c.Assert(s.m.waitForRsteps(2), Equals, 2)
+	c.Assert(s.m.cluster.waitForRsteps(2), Equals, 2)
 
 	// Get the claim again, validate it's updated
 	cl = s.m.GetPartitionClaim("test1", 0)
 	if cl.LastHeartbeat <= 0 || cl.ClientID != "cl" || cl.GroupID != "gr" {
-		c.Error("PartitionClaim values unexpected")
+		c.Errorf("PartitionClaim values unexpected %+v", cl)
 	}
 	if cl.LastOffset != 10 {
 		c.Error("LastOffset is not 10")
@@ -137,12 +137,12 @@ func (s *MarshalSuite) TestPartitionLifecycleIntegration(c *C) {
 
 	// Release
 	c.Assert(s.m.ReleasePartition("test1", 0, 20), IsNil)
-	c.Assert(s.m.waitForRsteps(3), Equals, 3)
+	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 
 	// Get the claim again, validate it's empty
 	cl = s.m.GetPartitionClaim("test1", 0)
 	if cl.LastHeartbeat > 0 || cl.ClientID != "" || cl.GroupID != "" {
-		c.Errorf("PartitionClaim values unexpected %s", cl)
+		c.Errorf("PartitionClaim values unexpected %+v", cl)
 	}
 	if cl.LastOffset != 0 {
 		c.Error("LastOffset is not 20")
@@ -151,7 +151,7 @@ func (s *MarshalSuite) TestPartitionLifecycleIntegration(c *C) {
 	// Get the last known claim data
 	cl = s.m.GetLastPartitionClaim("test1", 0)
 	if cl.LastHeartbeat > 0 || cl.ClientID != "cl" || cl.GroupID != "gr" {
-		c.Errorf("PartitionClaim values unexpected %s", cl)
+		c.Errorf("PartitionClaim values unexpected %+v", cl)
 	}
 	if cl.LastOffset != 20 {
 		c.Error("LastOffset is not 20")

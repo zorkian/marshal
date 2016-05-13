@@ -18,24 +18,24 @@ import (
 
 // kafkaConsumerChannel creates a consumer that continuously attempts to consume messages from
 // Kafka for the given partition.
-func (m *Marshaler) kafkaConsumerChannel(partID int) <-chan message {
-	log.Debugf("rationalize[%d]: starting", partID)
+func (c *KafkaCluster) kafkaConsumerChannel(partID int) <-chan message {
+	log.Debugf("[%s] rationalize[%d]: starting", c.name, partID)
 	out := make(chan message, 1000)
-	go m.consumeFromKafka(partID, out, false)
+	go c.consumeFromKafka(partID, out, false)
 	return out
 }
 
 // consumeFromKafka will start consuming messages from Kafka and writing them to the given
 // channel forever. It is important that this method closes the "out" channel when it's done,
 // as that instructs the downstream goroutine to exit.
-func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest bool) {
+func (c *KafkaCluster) consumeFromKafka(partID int, out chan message, startOldest bool) {
 	var err error
 	var alive bool
 	var offsetFirst, offsetNext int64
 
 	// Exit logic -- make sure downstream knows we exited.
 	defer func() {
-		log.Debugf("rationalize[%d]: terminating.", partID)
+		log.Debugf("[%s] rationalize[%d]: terminating.", c.name, partID)
 		close(out)
 	}()
 
@@ -45,23 +45,24 @@ func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 	for ; true; time.Sleep(retry.Duration()) {
 		// Figure out how many messages are in this topic. This can fail if the broker handling
 		// this partition is down, so we will loop.
-		offsetFirst, err = m.kafka.OffsetEarliest(MarshalTopic, int32(partID))
+		offsetFirst, err = c.broker.OffsetEarliest(MarshalTopic, int32(partID))
 		if err != nil {
-			log.Errorf("rationalize[%d]: failed to get offset: %s", partID, err)
+			log.Errorf("[%s] rationalize[%d]: failed to get offset: %s", c.name, partID, err)
 			continue
 		}
-		offsetNext, err = m.kafka.OffsetLatest(MarshalTopic, int32(partID))
+		offsetNext, err = c.broker.OffsetLatest(MarshalTopic, int32(partID))
 		if err != nil {
-			log.Errorf("rationalize[%d]: failed to get offset: %s", partID, err)
+			log.Errorf("[%s] rationalize[%d]: failed to get offset: %s", c.name, partID, err)
 			continue
 		}
-		log.Debugf("rationalize[%d]: offsets %d to %d", partID, offsetFirst, offsetNext)
+		log.Debugf("[%s] rationalize[%d]: offsets %d to %d",
+			c.name, partID, offsetFirst, offsetNext)
 
 		// TODO: Is there a case where the latest offset is X>0 but there is no data in
 		// the partition? does the offset reset to 0?
 		if offsetNext == 0 || offsetFirst == offsetNext {
 			alive = true
-			m.rationalizers.Done()
+			c.rationalizers.Done()
 		}
 		break
 	}
@@ -79,27 +80,27 @@ func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 	if !startOldest && offsetNext-offsetFirst > 100000 {
 		checkMessageTs = true
 		consumerConf.StartOffset = offsetNext - 100000
-		log.Infof("rationalize[%d]: fast forwarding to offset %d.",
-			partID, consumerConf.StartOffset)
+		log.Infof("[%s] rationalize[%d]: fast forwarding to offset %d.",
+			c.name, partID, consumerConf.StartOffset)
 	}
 
-	consumer, err := m.kafka.Consumer(consumerConf)
+	consumer, err := c.broker.Consumer(consumerConf)
 	if err != nil {
-		// Unfortunately this is a termination error, as without being able to consume this partition
-		// we can't effectively rationalize.
-		log.Errorf("rationalize[%d]: Failed to create consumer: %s", partID, err)
-		m.Terminate()
+		// Unfortunately this is a termination error, as without being able to consume this
+		// partition we can't effectively rationalize.
+		log.Errorf("[%s] rationalize[%d]: Failed to create consumer: %s", c.name, partID, err)
+		c.Terminate()
 		return
 	}
 
 	// Consume messages forever, or until told to quit.
-	for !m.Terminated() {
+	for !c.Terminated() {
 		msgb, err := consumer.Consume()
 		if err != nil {
 			// The internal consumer will do a number of retries. If we get an error here,
 			// we're probably in the middle of a partition handoff. We should pause so we
 			// don't hammer the cluster, but otherwise continue.
-			log.Warningf("rationalize[%d]: failed to consume: %s", partID, err)
+			log.Warningf("[%s] rationalize[%d]: failed to consume: %s", c.name, partID, err)
 			time.Sleep(retry.Duration())
 			continue
 		}
@@ -107,19 +108,19 @@ func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 
 		msg, err := decode(msgb.Value)
 		if err != nil {
-			// Invalid message in the stream. This should never happen, but if it does, just
+			// Invalid message in the streac. This should never happen, but if it does, just
 			// continue on.
 			// TODO: We should probably think about this. If we end up in a situation where
 			// one version of this software has a bug that writes invalid messages, it could
 			// be doing things we don't anticipate. Of course, crashing all consumers
 			// reading that partition is also bad.
-			log.Errorf("rationalize[%d]: %s", partID, err)
+			log.Errorf("[%s] rationalize[%d]: %s", c.name, partID, err)
 
 			// In the case where the first message is an invalid message, we need to
 			// to notify that we're alive now
 			if !alive {
 				alive = true
-				m.rationalizers.Done()
+				c.rationalizers.Done()
 			}
 			continue
 		}
@@ -130,15 +131,15 @@ func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 		// TODO: This could be a binary search or something.
 		if checkMessageTs {
 			if int64(msg.Timestamp()) > time.Now().Unix()-HeartbeatInterval*2 {
-				log.Warningf("rationalize[%d]: rewinding, fast-forwarded message was too new",
-					partID)
-				go m.consumeFromKafka(partID, out, true)
+				log.Warningf("[%s] rationalize[%d]: rewinding, fast-forwarded message was too new",
+					c.name, partID)
+				go c.consumeFromKafka(partID, out, true)
 				return // terminate self.
 			}
 			checkMessageTs = false
 		}
 
-		log.Debugf("rationalize[%d]: @%d: [%s]", partID, msgb.Offset, msg.Encode())
+		log.Debugf("[%s] rationalize[%d]: @%d: [%s]", c.name, partID, msgb.Offset, msg.Encode())
 		out <- msg
 
 		// This is a one-time thing that fires the first time the rationalizer comes up
@@ -147,17 +148,17 @@ func (m *Marshaler) consumeFromKafka(partID int, out chan message, startOldest b
 			for len(out) > 0 {
 				time.Sleep(100 * time.Millisecond)
 			}
-			log.Infof("rationalize[%d]: reached offset %d, now alive",
-				partID, msgb.Offset)
+			log.Infof("[%s] rationalize[%d]: reached offset %d, now alive",
+				c.name, partID, msgb.Offset)
 			alive = true
-			m.rationalizers.Done()
+			c.rationalizers.Done()
 		}
 	}
 }
 
 // updateClaim is called whenever we need to adjust a claim structure.
-func (m *Marshaler) updateClaim(msg *msgHeartbeat) {
-	topic := m.getPartitionState(msg.GroupID, msg.Topic, msg.PartID)
+func (c *KafkaCluster) updateClaim(msg *msgHeartbeat) {
+	topic := c.getPartitionState(msg.GroupID, msg.Topic, msg.PartID)
 
 	topic.lock.Lock()
 	defer topic.lock.Unlock()
@@ -172,8 +173,8 @@ func (m *Marshaler) updateClaim(msg *msgHeartbeat) {
 }
 
 // releaseClaim is called whenever someone has released their claim on a partition.
-func (m *Marshaler) releaseClaim(msg *msgReleasingPartition) {
-	topic := m.getPartitionState(msg.GroupID, msg.Topic, msg.PartID)
+func (c *KafkaCluster) releaseClaim(msg *msgReleasingPartition) {
+	topic := c.getPartitionState(msg.GroupID, msg.Topic, msg.PartID)
 
 	topic.lock.Lock()
 	defer topic.lock.Unlock()
@@ -181,7 +182,8 @@ func (m *Marshaler) releaseClaim(msg *msgReleasingPartition) {
 	// The partition must be claimed by the person releasing it
 	if topic.partitions[msg.PartID].ClientID != msg.ClientID ||
 		topic.partitions[msg.PartID].GroupID != msg.GroupID {
-		log.Warningf("ReleasePartition message from client that doesn't own it. Dropping.")
+		log.Warningf("[%s] ReleasePartition message from client that doesn't own it. Dropping.",
+			c.name)
 		return
 	}
 
@@ -192,35 +194,24 @@ func (m *Marshaler) releaseClaim(msg *msgReleasingPartition) {
 }
 
 // handleClaim is called whenever we see a ClaimPartition message.
-func (m *Marshaler) handleClaim(msg *msgClaimingPartition) {
-	topic := m.getPartitionState(msg.GroupID, msg.Topic, msg.PartID)
+func (c *KafkaCluster) handleClaim(msg *msgClaimingPartition) {
+	topic := c.getPartitionState(msg.GroupID, msg.Topic, msg.PartID)
 
 	topic.lock.Lock()
 	defer topic.lock.Unlock()
 
 	// Send message to all pending consumers then clear the list (it is a violation of the
-	// protocol to send two responses)
-	fireEvents := func(evt bool) {
+	// protocol to send two responses). This fires at the end when we exit so that anybody
+	// who is waiting on this partition will know the state has changed.
+	defer func() {
 		for _, out := range topic.partitions[msg.PartID].pendingClaims {
-			out <- evt
+			close(out)
 		}
 		topic.partitions[msg.PartID].pendingClaims = nil
-	}
+	}()
 
-	// Claim logic: if the claim is for an already claimed partition, we can end now and decide
-	// whether or not to fire.
-	if topic.partitions[msg.PartID].isClaimed(m.ts) {
-		// The ClaimPartition message needs to be from us, or we should just return
-		if msg.ClientID == m.clientID && msg.GroupID == m.groupID {
-			// Now determine if we own the partition claim and let us know whether we do
-			// or not
-			if topic.partitions[msg.PartID].ClientID == m.clientID &&
-				topic.partitions[msg.PartID].GroupID == m.groupID {
-				fireEvents(true)
-			} else {
-				fireEvents(false)
-			}
-		}
+	// If the partition is already claimed, there's nothing we need to do.
+	if topic.partitions[msg.PartID].isClaimed(c.ts) {
 		return
 	}
 
@@ -231,39 +222,32 @@ func (m *Marshaler) handleClaim(msg *msgClaimingPartition) {
 	topic.partitions[msg.PartID].GroupID = msg.GroupID
 	topic.partitions[msg.PartID].LastOffset = 0 // not present in this message, reset.
 	topic.partitions[msg.PartID].LastHeartbeat = int64(msg.Time)
-
-	// Now we can advise that this partition has been handled
-	if msg.ClientID == m.clientID && msg.GroupID == m.groupID {
-		fireEvents(true)
-	} else {
-		fireEvents(false)
-	}
 }
 
 // rationalize is a goroutine that constantly consumes from a given partition of the marshal
 // topic and makes changes to the world state whenever something happens.
-func (m *Marshaler) rationalize(partID int, in <-chan message) { // Might be in over my head.
-	for !m.Terminated() {
+func (c *KafkaCluster) rationalize(partID int, in <-chan message) { // Might be in over my head.
+	for !c.Terminated() {
 		msg, ok := <-in
 		if !ok {
-			log.Infof("rationalize[%d]: exiting, channel closed", partID)
+			log.Infof("[%s] rationalize[%d]: exiting, channel closed", c.name, partID)
 			return
 		}
 
 		switch msg.Type() {
 		case msgTypeHeartbeat:
-			m.updateClaim(msg.(*msgHeartbeat))
+			c.updateClaim(msg.(*msgHeartbeat))
 		case msgTypeClaimingPartition:
-			m.handleClaim(msg.(*msgClaimingPartition))
+			c.handleClaim(msg.(*msgClaimingPartition))
 		case msgTypeReleasingPartition:
-			m.releaseClaim(msg.(*msgReleasingPartition))
+			c.releaseClaim(msg.(*msgReleasingPartition))
 		case msgTypeClaimingMessages:
 			// TODO: Implement.
 		}
 
 		// Update step counter so the test suite can wait for messages to be
 		// processed in a predictable way (rather than waiting random times)
-		atomic.AddInt32(m.rsteps, 1)
+		atomic.AddInt32(c.rsteps, 1)
 	}
-	log.Infof("rationalize[%d]: exiting, Marshaler terminated", partID)
+	log.Infof("[%s] rationalize[%d]: exiting, Marshaler terminated", c.name, partID)
 }

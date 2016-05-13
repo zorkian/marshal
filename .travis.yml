@@ -1,9 +1,8 @@
 language: go
 
 go:
-  - 1.4
+  - 1.6
   - 1.5
-  - tip
 
 env:
   - "PATH=/home/travis/gopath/bin:$PATH"
@@ -18,5 +17,4 @@ install:
 
 matrix:
     allow_failures:
-        - go: tip
-        - go: 1.4
+        - go: 1.6

@@ -158,7 +158,7 @@ func (c *claim) setup() {
 	consumerConf.RequestTimeout = 3 * time.Second
 	// Do not retry. If we get back no data, we'll do our own retries.
 	consumerConf.RetryLimit = 0
-	kafkaConsumer, err := c.marshal.kafka.Consumer(consumerConf)
+	kafkaConsumer, err := c.marshal.cluster.broker.Consumer(consumerConf)
 	if err != nil {
 		log.Errorf("[%s:%d] consumer failed to create Kafka Consumer: %s",
 			c.topic, c.partID, err)
@@ -469,12 +469,12 @@ func (c *claim) healthCheck() bool {
 // healthCheckLoop runs regularly and will perform a health check. Exits when we are no longer
 // a claimed partition
 func (c *claim) healthCheckLoop() {
-	time.Sleep(<-c.marshal.jitters)
+	time.Sleep(<-c.marshal.cluster.jitters)
 	for c.Claimed() {
 		if c.healthCheck() {
 			go c.heartbeat()
 		}
-		time.Sleep(<-c.marshal.jitters)
+		time.Sleep(<-c.marshal.cluster.jitters)
 	}
 	log.Debugf("[%s:%d] health check loop exiting", c.topic, c.partID)
 }
