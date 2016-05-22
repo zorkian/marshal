@@ -27,12 +27,19 @@ func (s *ClaimSuite) SetUpTest(c *C) {
 	s.m, err = NewMarshaler("cl", "gr", []string{s.s.Addr()})
 	c.Assert(err, IsNil)
 	s.cl = newClaim("test16", 0, s.m, s.ch, NewConsumerOptions())
+	c.Assert(s.cl, NotNil)
 }
 
 func (s *ClaimSuite) TearDownTest(c *C) {
-	s.cl.Release()
-	s.m.Terminate()
-	s.s.Close()
+	if s.cl != nil {
+		s.cl.Release()
+	}
+	if s.m != nil {
+		s.m.Terminate()
+	}
+	if s.s != nil {
+		s.s.Close()
+	}
 }
 
 func (s *ClaimSuite) Produce(topicName string, partID int, msgs ...string) int64 {
@@ -40,7 +47,7 @@ func (s *ClaimSuite) Produce(topicName string, partID int, msgs ...string) int64
 	for _, msg := range msgs {
 		protos = append(protos, &proto.Message{Value: []byte(msg)})
 	}
-	offset, err := s.m.producer.Produce(topicName, int32(partID), protos...)
+	offset, err := s.m.cluster.producer.Produce(topicName, int32(partID), protos...)
 	s.c.Assert(err, IsNil)
 	return offset
 }
@@ -211,7 +218,7 @@ func (s *ClaimSuite) TestRelease(c *C) {
 	c.Assert(s.cl.Claimed(), Equals, true)
 	c.Assert(s.cl.Release(), Equals, true)
 	c.Assert(s.cl.Claimed(), Equals, false)
-	c.Assert(s.m.waitForRsteps(3), Equals, 3)
+	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
 	c.Assert(s.cl.Release(), Equals, false)
 }
@@ -274,12 +281,12 @@ func (s *ClaimSuite) TestHeartbeat(c *C) {
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(0))
 	s.cl.offsets.Current = 10
 	c.Assert(s.cl.heartbeat(), Equals, true)
-	c.Assert(s.m.waitForRsteps(3), Equals, 3)
+	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(10))
 
 	// And test that releasing means we can't update heartbeat anymore
 	c.Assert(s.cl.Release(), Equals, true)
-	c.Assert(s.m.waitForRsteps(4), Equals, 4)
+	c.Assert(s.m.cluster.waitForRsteps(4), Equals, 4)
 	s.cl.offsets.Current = 20
 	c.Assert(s.cl.heartbeat(), Equals, false)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
@@ -364,7 +371,7 @@ func (s *ClaimSuite) TestHealthCheck(c *C) {
 	c.Assert(s.cl.cyclesBehind, Equals, 2)
 	c.Assert(s.cl.healthCheck(), Equals, false)
 	c.Assert(s.cl.cyclesBehind, Equals, 3)
-	c.Assert(s.m.waitForRsteps(3), Equals, 3)
+	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(0))
 	c.Assert(s.m.GetLastPartitionClaim("test16", 0).LastOffset, Equals, int64(21))
@@ -375,7 +382,7 @@ func (s *ClaimSuite) TestHealthCheckRelease(c *C) {
 	s.cl.lastHeartbeat -= HeartbeatInterval * 2
 	s.cl.offsets.Current = 5
 	c.Assert(s.cl.healthCheck(), Equals, false)
-	c.Assert(s.m.waitForRsteps(3), Equals, 3)
+	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
 	c.Assert(s.cl.Claimed(), Equals, false)
 	c.Assert(s.cl.healthCheck(), Equals, false)

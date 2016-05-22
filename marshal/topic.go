@@ -83,7 +83,7 @@ type PartitionClaim struct {
 	GroupID       string
 
 	// Used internally when someone is waiting on this partition to be claimed.
-	pendingClaims []chan bool
+	pendingClaims []chan struct{}
 }
 
 // isClaimed returns a boolean indicating whether or not this structure is indicating a
