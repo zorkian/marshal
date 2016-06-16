@@ -138,8 +138,17 @@ func (m *Marshaler) Terminate() {
 	}
 	m.consumers = nil
 
-	// If we own the cluster, terminate it.
+	// If we own the cluster, terminate it, and remove its reference to this marshal.
 	if m.ownsCluster {
+		m.cluster.lock.Lock()
+		for i, marshaler := range m.cluster.marshalers {
+			if m == marshaler {
+				m.cluster.marshalers = append(m.cluster.marshalers[:i],
+					m.cluster.marshalers[i+1:]...)
+				break
+			}
+		}
+		m.cluster.lock.Unlock()
 		m.cluster.Terminate()
 	}
 }

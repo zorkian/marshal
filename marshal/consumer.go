@@ -522,6 +522,16 @@ func (c *Consumer) Terminate(release bool) bool {
 	// updateTopicClaims expects to be called with RLock held
 	c.updateTopicClaims(latestTopicClaims, false)
 	close(c.topicClaimsChan)
+
+	// Remove this consumer from associated marshal.
+	c.marshal.lock.Lock()
+	defer c.marshal.lock.Unlock()
+	for i, cn := range c.marshal.consumers {
+		if cn == c {
+			c.marshal.consumers = append(c.marshal.consumers[:i],
+				c.marshal.consumers[i+1:]...)
+		}
+	}
 	return true
 }
 
