@@ -129,7 +129,6 @@ func (m *Marshaler) Terminate() {
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
-
 	// Now terminate all of the consumers. In this codepath we do a no-release termination
 	// because that is usually correct in production. If someone actually wants to release
 	// they need to terminate the consumers manually.
@@ -138,17 +137,21 @@ func (m *Marshaler) Terminate() {
 	}
 	m.consumers = nil
 
-	// If we own the cluster, terminate it, and remove its reference to this marshal.
-	if m.ownsCluster {
+	// Remove this marshal from its cluster.
+	go func() {
 		m.cluster.lock.Lock()
-		for i, marshaler := range m.cluster.marshalers {
-			if m == marshaler {
+		for i, ml := range m.cluster.marshalers {
+			if ml == m {
 				m.cluster.marshalers = append(m.cluster.marshalers[:i],
 					m.cluster.marshalers[i+1:]...)
 				break
 			}
 		}
 		m.cluster.lock.Unlock()
+	}()
+
+	// If we own the cluster, terminate it, and remove its reference to this marshal.
+	if m.ownsCluster {
 		m.cluster.Terminate()
 	}
 }
