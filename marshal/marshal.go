@@ -85,6 +85,18 @@ func (m *Marshaler) addNewConsumer(c *Consumer) {
 	m.consumers = append(m.consumers, c)
 }
 
+// removeConsumer is called when a Consumer is terminating and should be removed from our list.
+func (m *Marshaler) removeConsumer(c *Consumer) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	for i, cn := range m.consumers {
+		if cn == c {
+			m.consumers = append(m.consumers[:i], m.consumers[i+1:]...)
+			break
+		}
+	}
+}
+
 // getClaimedPartitionState returns a topicState iff it is claimed by the current Marshaler.
 // Else, an error is returned. This is on the Marshaler becomes it's a helper to only return
 // a claim that is presently valid and owned by us.
@@ -121,20 +133,20 @@ func (m *Marshaler) Partitions(topicName string) int {
 	return m.cluster.getTopicPartitions(topicName)
 }
 
-// Terminate is called when we're done with the marshaler and want to shut down.
-func (m *Marshaler) Terminate() {
+// terminateAndCleanup terminates the marshal, with the option of removing
+// the marshaler's reference from its associated cluster.
+func (m *Marshaler) terminateAndCleanup(remove bool) {
 	if !atomic.CompareAndSwapInt32(m.quit, 0, 1) {
 		return
 	}
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
-
 	// Now terminate all of the consumers. In this codepath we do a no-release termination
 	// because that is usually correct in production. If someone actually wants to release
 	// they need to terminate the consumers manually.
 	for _, cn := range m.consumers {
-		cn.Terminate(false)
+		cn.terminateAndCleanup(false, false)
 	}
 	m.consumers = nil
 
@@ -142,6 +154,18 @@ func (m *Marshaler) Terminate() {
 	if m.ownsCluster {
 		m.cluster.Terminate()
 	}
+
+	// Remove this marshal from its cluster. Doing so is recommended
+	// if the cluster doesn't remove the terminated marshal itself (by setting its
+	// list of marshals to nil or filtering them).
+	if remove {
+		m.cluster.removeMarshal(m)
+	}
+}
+
+// Terminate is called when we're done with the marshaler and want to shut down.
+func (m *Marshaler) Terminate() {
+	m.terminateAndCleanup(true)
 }
 
 // Terminated returns whether or not we have been terminated.

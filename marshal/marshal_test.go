@@ -157,3 +157,10 @@ func (s *MarshalSuite) TestPartitionLifecycleIntegration(c *C) {
 		c.Error("LastOffset is not 20")
 	}
 }
+
+func (s *MarshalSuite) TestTerminatedMarshalRemovesSelfFromCluster(c *C) {
+	// Test that terminated Marshalers remove their cluster's reference to it.
+	c.Assert(s.m.cluster.marshalers, DeepEquals, []*Marshaler{s.m})
+	s.m.Terminate()
+	c.Assert(s.m.cluster.marshalers, DeepEquals, []*Marshaler{})
+}

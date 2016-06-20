@@ -482,10 +482,10 @@ func (c *Consumer) Terminated() bool {
 	return atomic.LoadInt32(c.alive) == 0
 }
 
-// Terminate instructs the consumer to commit its offsets and possibly release its partitions.
-// This will allow other consumers to begin consuming.
-// (If you do not call this method before exiting, things will still work, but more slowly.)
-func (c *Consumer) Terminate(release bool) bool {
+// terminateAndCleanup instructs the consumer to commit its offsets,
+// possibly release its partitions, and possibly remove its reference from
+// the associated marshaler. This will allow other consumers to begin consuming.
+func (c *Consumer) terminateAndCleanup(release bool, remove bool) bool {
 	if !atomic.CompareAndSwapInt32(c.alive, 1, 0) {
 		return false
 	}
@@ -518,11 +518,24 @@ func (c *Consumer) Terminate(release bool) bool {
 		}
 	}
 
+	// Optionally remove consumer from its marshal. Doing so is recommended
+	// if the marshal doesn't explicitly remove the consumer.
+	if remove {
+		c.marshal.removeConsumer(c)
+	}
+
 	// update the claims
 	// updateTopicClaims expects to be called with RLock held
 	c.updateTopicClaims(latestTopicClaims, false)
 	close(c.topicClaimsChan)
 	return true
+
+}
+
+// Terminate instructs the consumer to clean up and allow other consumers to begin consuming.
+// (If you do not call this method before exiting, things will still work, but more slowly.)
+func (c *Consumer) Terminate(release bool) bool {
+	return c.terminateAndCleanup(release, true)
 }
 
 // GetCurrentTopicClaims returns the topics that are currently claimed by this
