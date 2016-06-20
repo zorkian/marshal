@@ -521,23 +521,7 @@ func (c *Consumer) terminateAndCleanup(release bool, remove bool) bool {
 	// Optionally remove consumer from its marshal. Doing so is recommended
 	// if the marshal doesn't explicitly remove the consumer.
 	if remove {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			c.marshal.lock.Lock()
-
-			for i, cn := range c.marshal.consumers {
-				if cn == c {
-					c.marshal.consumers = append(c.marshal.consumers[:i],
-						c.marshal.consumers[i+1:]...)
-					break
-				}
-			}
-			log.Info("Consumer releasing lock")
-			c.marshal.lock.Unlock()
-			wg.Done()
-		}()
-		wg.Wait()
+		c.marshal.removeConsumer(c)
 	}
 
 	// update the claims

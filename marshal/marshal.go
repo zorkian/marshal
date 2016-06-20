@@ -85,6 +85,19 @@ func (m *Marshaler) addNewConsumer(c *Consumer) {
 	m.consumers = append(m.consumers, c)
 }
 
+// removeConsumer is called when a Consumer is terminating and should be removed from our list.
+func (m *Marshaler) removeConsumer(c *Consumer) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	for i, cn := range c.marshal.consumers {
+		if cn == c {
+			c.marshal.consumers = append(c.marshal.consumers[:i],
+				c.marshal.consumers[i+1:]...)
+			break
+		}
+	}
+}
+
 // getClaimedPartitionState returns a topicState iff it is claimed by the current Marshaler.
 // Else, an error is returned. This is on the Marshaler becomes it's a helper to only return
 // a claim that is presently valid and owned by us.
@@ -147,21 +160,7 @@ func (m *Marshaler) terminateAndCleanup(remove bool) {
 	// if the cluster doesn't remove the terminated marshal itself (by setting its
 	// list of marshals to nil or filtering them).
 	if remove {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			m.cluster.lock.Lock()
-			for i, ml := range m.cluster.marshalers {
-				if ml == m {
-					m.cluster.marshalers = append(m.cluster.marshalers[:i],
-						m.cluster.marshalers[i+1:]...)
-					break
-				}
-			}
-			m.cluster.lock.Unlock()
-			wg.Done()
-		}()
-		wg.Wait()
+		m.cluster.removeMarshal(m)
 	}
 }
 

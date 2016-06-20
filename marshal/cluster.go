@@ -260,6 +260,19 @@ func (c *KafkaCluster) getTopicPartitions(topicName string) int {
 	return count
 }
 
+// removeMarshal removes a terminated Marshal from a cluster's list.
+func (c *KafkaCluster) removeMarshal(m *Marshaler) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	for i, ml := range m.cluster.marshalers {
+		if ml == m {
+			m.cluster.marshalers = append(m.cluster.marshalers[:i],
+				m.cluster.marshalers[i+1:]...)
+			break
+		}
+	}
+}
+
 // waitForRsteps is used by the test suite to ask the rationalizer to wait until some number
 // of events have been processed. This also returns the current rsteps when it returns.
 func (c *KafkaCluster) waitForRsteps(steps int) int {
