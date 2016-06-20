@@ -264,10 +264,9 @@ func (c *KafkaCluster) getTopicPartitions(topicName string) int {
 func (c *KafkaCluster) removeMarshal(m *Marshaler) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
-	for i, ml := range m.cluster.marshalers {
+	for i, ml := range c.marshalers {
 		if ml == m {
-			m.cluster.marshalers = append(m.cluster.marshalers[:i],
-				m.cluster.marshalers[i+1:]...)
+			c.marshalers = append(c.marshalers[:i], c.marshalers[i+1:]...)
 			break
 		}
 	}
