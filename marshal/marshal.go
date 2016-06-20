@@ -121,8 +121,9 @@ func (m *Marshaler) Partitions(topicName string) int {
 	return m.cluster.getTopicPartitions(topicName)
 }
 
-// Terminate is called when we're done with the marshaler and want to shut down.
-func (m *Marshaler) Terminate() {
+// terminateAndCleanup terminates the marshal, with the option of removing
+// the marshaler's reference from its associated cluster.
+func (m *Marshaler) terminateAndCleanup(remove bool) {
 	if !atomic.CompareAndSwapInt32(m.quit, 0, 1) {
 		return
 	}
@@ -133,27 +134,40 @@ func (m *Marshaler) Terminate() {
 	// because that is usually correct in production. If someone actually wants to release
 	// they need to terminate the consumers manually.
 	for _, cn := range m.consumers {
-		cn.Terminate(false)
+		cn.terminateAndCleanup(false, false)
 	}
 	m.consumers = nil
 
-	// Remove this marshal from its cluster.
-	go func() {
-		m.cluster.lock.Lock()
-		for i, ml := range m.cluster.marshalers {
-			if ml == m {
-				m.cluster.marshalers = append(m.cluster.marshalers[:i],
-					m.cluster.marshalers[i+1:]...)
-				break
-			}
-		}
-		m.cluster.lock.Unlock()
-	}()
-
-	// If we own the cluster, terminate it, and remove its reference to this marshal.
+	// If we own the cluster, terminate it.
 	if m.ownsCluster {
 		m.cluster.Terminate()
 	}
+
+	// Remove this marshal from its cluster. Doing so is recommended
+	// if the cluster doesn't remove the terminated marshal itself (by setting its
+	// list of marshals to nil or filtering them).
+	if remove {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			m.cluster.lock.Lock()
+			for i, ml := range m.cluster.marshalers {
+				if ml == m {
+					m.cluster.marshalers = append(m.cluster.marshalers[:i],
+						m.cluster.marshalers[i+1:]...)
+					break
+				}
+			}
+			m.cluster.lock.Unlock()
+			wg.Done()
+		}()
+		wg.Wait()
+	}
+}
+
+// Terminate is called when we're done with the marshaler and want to shut down.
+func (m *Marshaler) Terminate() {
+	m.terminateAndCleanup(true)
 }
 
 // Terminated returns whether or not we have been terminated.

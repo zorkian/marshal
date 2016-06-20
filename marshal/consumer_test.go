@@ -591,3 +591,11 @@ func (s *ConsumerSuite) TestMaximumGreedyClaims(c *C) {
 	c.Assert(s.cn.isClaimLimitReached(), Equals, true)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
 }
+
+func (s *ConsumerSuite) TestConsumerRemovesSelfFromMarshal(c *C) {
+	// Test that Consumers remove themselves from the associated Marshal.
+	s.m.addNewConsumer(s.cn)
+	c.Assert(s.m.consumers, DeepEquals, []*Consumer{s.cn})
+	s.cn.Terminate(true)
+	c.Assert(s.cn.marshal.consumers, DeepEquals, []*Consumer{})
+}

@@ -284,7 +284,7 @@ func (c *KafkaCluster) Terminate() {
 	// Terminate all Marshalers which will in turn terminate all Consumers and
 	// let everybody know we're all done.
 	for _, marshaler := range c.marshalers {
-		marshaler.Terminate()
+		marshaler.terminateAndCleanup(false)
 	}
 	c.marshalers = nil
 
