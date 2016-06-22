@@ -147,7 +147,7 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 			}
 
 			// this check needs to be after iterating all partitions in a topic
-			if len(c.claimedTopics) >= options.MaximumClaims {
+			if options.ClaimEntireTopic && len(c.claimedTopics) >= options.MaximumClaims {
 				log.Infof("reached max-topics for fast-reclaim. Claimed topics: %v",
 					c.claimedTopics)
 				break
