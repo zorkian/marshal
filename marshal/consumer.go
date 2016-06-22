@@ -323,6 +323,8 @@ func (c *Consumer) claimPartitions() {
 		// claiming this partition
 		if lastClaim.GroupID == c.marshal.groupID &&
 			lastClaim.ClientID == c.marshal.clientID {
+			log.Infof("skipping unclaimed partition %s:%d because we previously released it",
+				topic, partID)
 			continue
 		}
 
