@@ -361,9 +361,17 @@ func (s *ClaimSuite) TestHealthCheck(c *C) {
 	c.Assert(s.cl.healthCheck(), Equals, true)
 	c.Assert(s.cl.cyclesBehind, Equals, 0)
 
-	// Now we're behind and fail health checks 3 times, this will release
+	// Test that "predictive speed" is working, i.e., that the consumer is
+	// considered healthy when it's within a heartbeat of the end
 	s.cl.offsets.Latest = 31
 	s.cl.offsetLatestHistory = [10]int64{1, 11, 21, 31, 0, 0, 0, 0, 0, 0}
+	c.Assert(s.cl.ConsumerVelocity() < s.cl.PartitionVelocity(), Equals, true)
+	c.Assert(s.cl.healthCheck(), Equals, true)
+	c.Assert(s.cl.cyclesBehind, Equals, 0)
+
+	// Now we're behind and fail health checks 3 times, this will release
+	s.cl.offsets.Latest = 32
+	s.cl.offsetLatestHistory = [10]int64{1, 11, 21, 32, 0, 0, 0, 0, 0, 0}
 	c.Assert(s.cl.ConsumerVelocity() < s.cl.PartitionVelocity(), Equals, true)
 	c.Assert(s.cl.healthCheck(), Equals, true)
 	c.Assert(s.cl.cyclesBehind, Equals, 1)

@@ -357,8 +357,10 @@ func (c *claim) heartbeat() bool {
 		go c.Release()
 	}
 
-	log.Infof("[%s:%d] heartbeat: current offset %d with %d uncommitted messages",
-		c.topic, c.partID, c.offsets.Current, c.outstandingMessages)
+	log.Infof("[%s:%d] heartbeat: Last read offset is %d, partition offset range is %d..%d.",
+		c.topic, c.partID, c.offsets.Current, c.offsets.Earliest, c.offsets.Latest)
+	log.Infof("[%s:%d] heartbeat: There are %d messages in queue and %d messages outstanding.",
+		c.topic, c.partID, len(c.messages), c.outstandingMessages)
 	c.lastHeartbeat = time.Now().Unix()
 	return true
 }
@@ -429,19 +431,21 @@ func (c *claim) healthCheck() bool {
 		return true
 	}
 
-	// If current has gone forward of the latest (which is possible, but unlikely)
-	// then we are by definition caught up
-	if c.offsets.Current >= c.offsets.Latest {
+	// We consider a consumer to be caught up if the predicted offset is past the end
+	// of the partition. This takes into account the fact that we only get offset information
+	// every hearbeat, so we could have some stale data.
+	testOffset := c.offsets.Current + int64(consumerVelocity*2)
+	log.Infof("testOffset = %d, latest = %d", testOffset, c.offsets.Latest)
+	if testOffset >= c.offsets.Latest {
 		c.cyclesBehind = 0
 		return true
 	}
 
-	// If velocity is good, reset cycles behind and exit
+	// If the consumer is moving faster than the partition, consider it healthy. This case
+	// is true in the standard catching up from behind case.
 	if partitionVelocity <= consumerVelocity {
-		if c.cyclesBehind != 0 {
-			log.Warningf("[%s:%d] catching up: (resetting warning) CV %0.2f < PV %0.2f (warning #%d)",
-				c.topic, c.partID, consumerVelocity, partitionVelocity, c.cyclesBehind)
-		}
+		log.Infof("[%s:%d] consumer catching up: consume ∆ %0.2f >= produce ∆ %0.2f",
+			c.topic, c.partID, consumerVelocity, partitionVelocity)
 		c.cyclesBehind = 0
 		return true
 	}
@@ -454,14 +458,14 @@ func (c *claim) healthCheck() bool {
 	// partition. If so, do this in a goroutine since it will involve calling out
 	// to Kafka and releasing the partition.
 	if c.cyclesBehind >= 3 {
-		log.Warningf("[%s:%d] consumer unhealthy, releasing",
+		log.Warningf("[%s:%d] consumer unhealthy for too long, releasing",
 			c.topic, c.partID)
 		go c.Release()
 		return false
 	}
 
 	// Clearly we haven't been behind for long enough, so we're still "healthy"
-	log.Warningf("[%s:%d] consumer unhealthy: CV %0.2f < PV %0.2f (warning #%d)",
+	log.Warningf("[%s:%d] consumer too slow: consume ∆ %0.2f < produce ∆ %0.2f (warning #%d)",
 		c.topic, c.partID, consumerVelocity, partitionVelocity, c.cyclesBehind)
 	return true
 }

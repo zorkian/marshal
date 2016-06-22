@@ -352,8 +352,8 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 0)
 
-	// Produce 5, consume 3... at this point we are "unhealthy" since we are falling
-	// behind for this period
+	// Produce 5, consume 3... at this point we are "healthy" since predictive speed
+	// says we'll probably catch up within a heartbeat
 	s.Produce("test16", 0, "m2", "m3", "m4", "m5", "m6")
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m2"))
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m3"))
@@ -361,20 +361,34 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 	s.cn.claims[s.cn.defaultTopic()][0].heartbeat()
 	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
+	c.Assert(cl.cyclesBehind, Equals, 0)
+
+	// Consume nothing, produce two more, predictive speed will now fail
+	s.Produce("test16", 0, "m7", "m8")
+	s.cn.claims[s.cn.defaultTopic()][0].heartbeat()
+	c.Assert(cl.updateOffsets(), IsNil)
+	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 1)
 
-	// Produce nothing and consume the last two, we become healthy again because
+	// Produce nothing and consume the last four, we become healthy again because
 	// we are caught up and our velocity is equal
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m5"))
 	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m6"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m7"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m8"))
 	s.cn.claims[s.cn.defaultTopic()][0].heartbeat()
 	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.ConsumerVelocity() == cl.PartitionVelocity(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 0)
 
-	// Produce again, falls behind slightly
-	s.Produce("test16", 0, "m7")
+	// Produce a lot, goes unhealthy
+	s.Produce("test16", 0, "mX")
+	s.Produce("test16", 0, "mX")
+	s.Produce("test16", 0, "mX")
+	s.Produce("test16", 0, "mX")
+	s.Produce("test16", 0, "mX")
+	s.Produce("test16", 0, "mX")
 	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
 	c.Assert(cl.cyclesBehind, Equals, 1)
@@ -386,7 +400,12 @@ func (s *ConsumerSuite) TestUnhealthyPartition(c *C) {
 
 	// Consume the last message, which will fix our velocity and let us
 	// pass as healthy again
-	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("m7"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("mX"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("mX"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("mX"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("mX"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("mX"))
+	c.Assert(s.cn.consumeOne().Value, DeepEquals, []byte("mX"))
 	s.cn.claims[s.cn.defaultTopic()][0].heartbeat()
 	c.Assert(cl.updateOffsets(), IsNil)
 	c.Assert(cl.healthCheck(), Equals, true)
