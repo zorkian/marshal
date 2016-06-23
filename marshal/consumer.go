@@ -136,13 +136,24 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 					if _, ok := c.claims[topic]; !ok {
 						c.claims[topic] = make(map[int]*claim)
 					}
+
+					// update topic claims
+					if options.ClaimEntireTopic {
+						if partID == 0 {
+							c.claimedTopics[topic] = true
+						}
+
+						// don't fast re-claim partitions for a topic unless partition 0 is claimed
+						if !c.claimedTopics[topic] {
+							log.Infof("[%s:%d] blocked fast-reclaim because topic is not claimed",
+								topic, partID)
+							continue
+						}
+					}
+
 					c.claims[topic][partID] = newClaim(
 						topic, partID, c.marshal, c.messages, options)
 
-					// update topic claims
-					if options.ClaimEntireTopic && partID == 0 {
-						c.claimedTopics[topic] = true
-					}
 				}
 			}
 
