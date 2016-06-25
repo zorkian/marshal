@@ -33,7 +33,7 @@ func (s *ConsumerSuite) NewTestConsumer(m *Marshaler, topics []string) *Consumer
 		partitions:      make(map[string]int),
 		rand:            rand.New(rand.NewSource(time.Now().UnixNano())),
 		claims:          make(map[string]map[int]*claim),
-		messages:        make(chan *proto.Message, 1000),
+		messages:        make(chan *Message, 1000),
 		claimedTopics:   make(map[string]bool),
 		topicClaimsChan: make(chan map[string]bool, 1),
 	}
@@ -463,6 +463,30 @@ func (s *ConsumerSuite) TestCommittedOffset(c *C) {
 	c.Assert(s.cn.tryClaimPartition(s.cn.defaultTopic(), 0), Equals, true)
 	c.Assert(s.m.cluster.waitForRsteps(6), Equals, 6)
 	c.Assert(s.cn.claims[s.cn.defaultTopic()][0].offsets.Current, Equals, int64(3))
+}
+
+func (s *ConsumerSuite) TestCommitByToken(c *C) {
+	s.Produce("test16", 0, "m1")
+	c.Assert(s.cn.tryClaimPartition(s.cn.defaultTopic(), 0), Equals, true)
+	c.Assert(s.m.cluster.waitForRsteps(2), Equals, 2)
+	cl := s.cn.claims["test16"][0]
+	msg1 := <-s.cn.messages
+
+	// One outstanding offset, one tracked offset
+	c.Assert(cl.outstandingMessages, Equals, 1)
+	c.Assert(cl.numTrackingOffsets(), Equals, 1)
+
+	// Now commit it, 0 outstanding
+	token := msg1.CommitToken()
+	c.Assert(token.offset, Equals, int64(0))
+	c.Assert(s.cn.CommitByToken(token), IsNil)
+	c.Assert(cl.outstandingMessages, Equals, 0)
+	c.Assert(cl.numTrackingOffsets(), Equals, 1)
+
+	// Now heartbeat, both 0
+	c.Assert(cl.heartbeat(), Equals, true)
+	c.Assert(cl.outstandingMessages, Equals, 0)
+	c.Assert(cl.numTrackingOffsets(), Equals, 0)
 }
 
 func (s *ConsumerSuite) TestStrictOrdering(c *C) {

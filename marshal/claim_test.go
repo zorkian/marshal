@@ -15,14 +15,14 @@ type ClaimSuite struct {
 	c  *C
 	s  *kafkatest.Server
 	m  *Marshaler
-	ch chan *proto.Message
+	ch chan *Message
 	cl *claim
 }
 
 func (s *ClaimSuite) SetUpTest(c *C) {
 	s.c = c
 	s.s = StartServer()
-	s.ch = make(chan *proto.Message, 10)
+	s.ch = make(chan *Message, 10)
 	var err error
 	s.m, err = NewMarshaler("cl", "gr", []string{s.s.Addr()})
 	c.Assert(err, IsNil)
@@ -60,7 +60,7 @@ func (s *ClaimSuite) TestOffsetUpdates(c *C) {
 	c.Assert(s.cl.offsets.Latest, Equals, int64(3))
 }
 
-func (s *ClaimSuite) consumeOne(c *C) *proto.Message {
+func (s *ClaimSuite) consumeOne(c *C) *Message {
 	select {
 	case msg := <-s.ch:
 		return msg
@@ -96,7 +96,7 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 
 	// Commit 1, offset 1 but only after heartbeat phase
-	c.Assert(s.cl.Commit(msg1), IsNil)
+	c.Assert(s.cl.Commit(msg1.Offset), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
@@ -110,14 +110,14 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 
 	// Commit #3, offset will stay 1!
-	c.Assert(s.cl.Commit(msg3), IsNil)
+	c.Assert(s.cl.Commit(msg3.Offset), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
 
 	// Commit #2, offset now advances to 3
-	c.Assert(s.cl.Commit(msg2), IsNil)
+	c.Assert(s.cl.Commit(msg2.Offset), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(3))
@@ -125,12 +125,12 @@ func (s *ClaimSuite) TestCommit(c *C) {
 
 	// Attempt to commit invalid offset (never seen), make sure it errors
 	msg3.Offset = 95
-	c.Assert(s.cl.Commit(msg3), NotNil)
+	c.Assert(s.cl.Commit(msg3.Offset), NotNil)
 
 	// Commit the rest
-	c.Assert(s.cl.Commit(s.consumeOne(c)), IsNil)
-	c.Assert(s.cl.Commit(s.consumeOne(c)), IsNil)
-	c.Assert(s.cl.Commit(s.consumeOne(c)), IsNil)
+	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
+	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
+	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(3))
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(6))
@@ -167,7 +167,7 @@ func (s *ClaimSuite) TestOrderedConsume(c *C) {
 	}
 
 	// Now commit, and then try to consume again, it should work
-	c.Assert(s.cl.Commit(msg1), IsNil)
+	c.Assert(s.cl.Commit(msg1.Offset), IsNil)
 	msg2 := s.consumeOne(c)
 	c.Assert(msg2.Value, DeepEquals, []byte("m2"))
 	c.Assert(s.cl.heartbeat(), Equals, true)
@@ -186,7 +186,7 @@ func (s *ClaimSuite) BenchmarkConsumeAndCommit(c *C) {
 	// Now consume everything and immediately commit it
 	for i := 0; i < c.N; i++ {
 		if msg := s.consumeOne(c); msg != nil {
-			s.cl.Commit(msg)
+			s.cl.Commit(msg.Offset)
 		}
 	}
 }
@@ -206,7 +206,7 @@ func (s *ClaimSuite) BenchmarkOrderedConsumeAndCommit(c *C) {
 	// Now consume everything and immediately commit it
 	for i := 0; i < c.N; i++ {
 		if msg := s.consumeOne(c); msg != nil {
-			s.cl.Commit(msg)
+			s.cl.Commit(msg.Offset)
 		}
 	}
 }
@@ -244,7 +244,7 @@ func (s *ClaimSuite) TestCommitOutstanding(c *C) {
 	// Consume 1, heartbeat... offsets still 0
 	msg1 := s.consumeOne(c)
 	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
-	c.Assert(s.cl.Commit(msg1), IsNil)
+	c.Assert(s.cl.Commit(msg1.Offset), IsNil)
 	// TODO: There's a race here. If the background goroutine decides to run a health check
 	// here it will consume our offset and this test fails. It's rare but possible.
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 6)

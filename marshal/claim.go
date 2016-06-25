@@ -49,7 +49,7 @@ type claim struct {
 	lastHeartbeat int64
 	options       ConsumerOptions
 	consumer      kafka.Consumer
-	messages      chan *proto.Message
+	messages      chan *Message
 
 	// tracking is a dict that maintains information about offsets that have been
 	// sent to and acknowledged by clients. An offset is inserted into this map when
@@ -71,7 +71,7 @@ type claim struct {
 // newClaim returns an internal claim object, used by the consumer to manage the
 // claim of a single partition.
 func newClaim(topic string, partID int, marshal *Marshaler,
-	messages chan *proto.Message, options ConsumerOptions) *claim {
+	messages chan *Message, options ConsumerOptions) *claim {
 	// Get all available offset information
 	offsets, err := marshal.GetPartitionOffsets(topic, partID)
 	if err != nil {
@@ -181,22 +181,22 @@ func (c *claim) setup() {
 // Commit is called by a Consumer class when the client has indicated that it has finished
 // processing a message. This updates our tracking structure so the heartbeat knows how
 // far ahead it can move our offset.
-func (c *claim) Commit(msg *proto.Message) error {
+func (c *claim) Commit(offset int64) error {
 	if atomic.LoadInt32(c.claimed) != 1 {
 		return fmt.Errorf("[%s:%d] is no longer claimed; can't commit offset %d",
-			c.topic, c.partID, msg.Offset)
+			c.topic, c.partID, offset)
 	}
 
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	_, ok := c.tracking[msg.Offset]
+	_, ok := c.tracking[offset]
 	if !ok {
 		// This is bogus; committing an offset we've never seen?
 		return fmt.Errorf("[%s:%d] committing offset %d but we've never seen it",
-			c.topic, c.partID, msg.Offset)
+			c.topic, c.partID, offset)
 	}
-	c.tracking[msg.Offset] = true
+	c.tracking[offset] = true
 	c.outstandingMessages--
 	// And now if we're using strict ordering mode, we can wake up the messagePump to
 	// advise it that it's ready to continue with its life
@@ -327,7 +327,11 @@ func (c *claim) messagePump() {
 		// until someone consumes the message blocking all Commit operations
 		c.messagesLock.Lock()
 		if !c.Terminated() {
-			c.messages <- msg
+			// This allocates a new Message to put the proto.Message in.
+			// TODO: This is really annoying and probably stupidly inefficient, is there any
+			// way to do this better?
+			tmp := Message(*msg)
+			c.messages <- &tmp
 		}
 		c.messagesLock.Unlock()
 	}
@@ -435,7 +439,6 @@ func (c *claim) healthCheck() bool {
 	// of the partition. This takes into account the fact that we only get offset information
 	// every hearbeat, so we could have some stale data.
 	testOffset := c.offsets.Current + int64(consumerVelocity*2)
-	log.Infof("testOffset = %d, latest = %d", testOffset, c.offsets.Latest)
 	if testOffset >= c.offsets.Latest {
 		c.cyclesBehind = 0
 		return true

@@ -19,6 +19,28 @@ import (
 	"github.com/dropbox/kafka/proto"
 )
 
+// CommitToken is a minimal structure that contains only the information necessary to
+// mark a message committed. This is done so that you can throw away the message instead
+// of holding on to it in memory.
+type CommitToken struct {
+	topic  string
+	partID int
+	offset int64
+}
+
+// Message is a container for Kafka messages.
+type Message proto.Message
+
+// CommitToken returns a CommitToken for a message. This can be passed to the
+// CommitByToken method.
+func (m *Message) CommitToken() CommitToken {
+	return CommitToken{
+		topic:  m.Topic,
+		partID: int(m.Partition),
+		offset: m.Offset,
+	}
+}
+
 // ConsumerOptions represents all of the options that a consumer can be configured with.
 type ConsumerOptions struct {
 	// FastReclaim instructs the consumer to attempt to reclaim any partitions
@@ -74,7 +96,7 @@ type Consumer struct {
 	partitions map[string]int
 	rand       *rand.Rand
 	options    ConsumerOptions
-	messages   chan *proto.Message
+	messages   chan *Message
 
 	// claims maps partition IDs to claim structures. The lock protects read/write
 	// access to this map.
@@ -112,7 +134,7 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 		topics:          topicNames,
 		partitions:      partitions,
 		options:         options,
-		messages:        make(chan *proto.Message, 10000),
+		messages:        make(chan *Message, 10000),
 		rand:            rand.New(rand.NewSource(time.Now().UnixNano())),
 		claims:          make(map[string]map[int]*claim),
 		claimedTopics:   make(map[string]bool),
@@ -642,13 +664,13 @@ func (c *Consumer) isClaimLimitReached() bool {
 
 // ConsumeChannel returns a read-only channel. Messages that are retrieved from Kafka will be
 // made available in this channel.
-func (c *Consumer) ConsumeChannel() <-chan *proto.Message {
+func (c *Consumer) ConsumeChannel() <-chan *Message {
 	return c.messages
 }
 
 // consumeOne returns a single message. This is mostly used within the test suite to
 // make testing easier as it simulates the message handling behavior.
-func (c *Consumer) consumeOne() *proto.Message {
+func (c *Consumer) consumeOne() *Message {
 	msg := <-c.messages
 	c.Commit(msg)
 	return msg
@@ -659,7 +681,7 @@ func (c *Consumer) consumeOne() *proto.Message {
 // we can never see this message again. This operation does nothing for at-most-once
 // consumption, as the commit happens in the Consume phase.
 // TODO: AMO description is wrong.
-func (c *Consumer) Commit(msg *proto.Message) error {
+func (c *Consumer) Commit(msg *Message) error {
 	cl, ok := func() (*claim, bool) {
 		c.lock.RLock()
 		defer c.lock.RUnlock()
@@ -670,7 +692,25 @@ func (c *Consumer) Commit(msg *proto.Message) error {
 	if !ok {
 		return errors.New("Message not committed (partition claim expired).")
 	}
-	return cl.Commit(msg)
+	return cl.Commit(msg.Offset)
+}
+
+// CommitByToken is called when you've finished processing a message. In the at-least-once
+// consumption case, this will allow the "last processed offset" to move forward so that
+// we can never see this message again. This particular method is used when you've only
+// got a CommitToken to commit from.
+func (c *Consumer) CommitByToken(token CommitToken) error {
+	cl, ok := func() (*claim, bool) {
+		c.lock.RLock()
+		defer c.lock.RUnlock()
+
+		cl, ok := c.claims[token.topic][token.partID]
+		return cl, ok
+	}()
+	if !ok {
+		return errors.New("Message not committed (partition claim expired).")
+	}
+	return cl.Commit(token.offset)
 }
 
 // PrintState outputs the status of the consumer.
