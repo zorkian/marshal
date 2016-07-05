@@ -190,7 +190,7 @@ func (s *ConsumerSuite) TestTopicClaimBlocked(c *C) {
 		}
 	}()
 
-	// Force our consumer to run it's topic claim loop so we know it has run
+	// Force our consumer to run its topic claim loop so we know it has run
 	cn.claimTopics()
 
 	// Ensure partition 1 is unclaimed still and that our new consumer has no claims
@@ -287,7 +287,6 @@ func (s *ConsumerSuite) TestMultiTopicClaim(c *C) {
 				// we should get topic claims one by one
 				log.Infof("received topic claims: %v\n", claimedTopics)
 				c.Assert(len(claimedTopics), Equals, i+1)
-				break
 			}
 		}
 	}()
@@ -306,6 +305,27 @@ func (s *ConsumerSuite) TestMultiTopicClaim(c *C) {
 	c.Assert(cn.getNumActiveClaims(), Equals, partitions)
 	c.Assert(len(claimedTopics), Equals, len(topics))
 	wg.Wait()
+
+	// let's force another claimTopics and make sure we don't get any more notifications.
+	// Force our consumer to run it's topic claim loop so we know it has run
+	cn.claimTopics()
+	timeoutChan := make(chan struct{})
+	go func() {
+		select {
+		case claimedTopics := <-cn.TopicClaims():
+			// we should not get any more topic claims
+			log.Errorf("received topic claims unexpectedly: %v\n", claimedTopics)
+			c.Fail()
+		case <-time.After(time.Second):
+			timeoutChan <- struct{}{}
+		}
+	}()
+
+	<-timeoutChan
+
+	claimedTopics, err = cn.GetCurrentTopicClaims()
+	c.Assert(err, IsNil)
+	c.Assert(len(claimedTopics), Equals, len(topics))
 }
 
 func (s *ConsumerSuite) TestMultiTopicClaimWithLimit(c *C) {

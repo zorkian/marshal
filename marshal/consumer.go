@@ -370,10 +370,22 @@ func (c *Consumer) isTopicClaimLimitReached(topic string) bool {
 // as the key, anybody who has that partition has claimed the entire topic. This requires all
 // consumers to use this mode.
 func (c *Consumer) claimTopics() {
+	// let's make a copy of what's in c.claimedTopics
 	latestClaims := make(map[string]bool)
+	if !c.Terminated() {
+		func() {
+			c.lock.RLock()
+			defer c.lock.RUnlock()
+			for topic, claimed := range c.claimedTopics {
+				latestClaims[topic] = claimed
+			}
+		}()
+	}
 
 	for topic, partitions := range c.partitions {
 		if partitions <= 0 {
+			delete(latestClaims, topic)
+			c.safeUpdateTopicClaims(latestClaims, false)
 			continue
 		}
 
@@ -384,10 +396,13 @@ func (c *Consumer) claimTopics() {
 			// If it's not claimed by us, return.
 			if lastClaim.GroupID != c.marshal.groupID ||
 				lastClaim.ClientID != c.marshal.clientID {
+				// in case we had this topic, but now somebody else has claimed it
+				delete(latestClaims, topic)
+				c.safeUpdateTopicClaims(latestClaims, false)
 				continue
 			}
+			// topic has already been claimed. No need to send notification.
 			latestClaims[topic] = true
-			c.safeUpdateTopicClaims(latestClaims, false)
 		} else {
 			// Unclaimed, so attempt to claim partition 0. This is how we key topic claims.
 			log.Infof("[%s] attempting to claim topic (key partition 0)\n", topic)
@@ -407,6 +422,7 @@ func (c *Consumer) claimTopics() {
 			}
 			log.Infof("[%s] claimed topic (key partition 0) successfully\n", topic)
 			latestClaims[topic] = true
+			// a new partition claim, let's send topic claim notification if necessary
 			c.safeUpdateTopicClaims(latestClaims, false)
 		}
 
