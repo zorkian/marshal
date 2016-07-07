@@ -635,6 +635,27 @@ func (s *ConsumerSuite) TestMaximumGreedyClaims(c *C) {
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
 }
 
+func (s *ConsumerSuite) TestUpdatePartitionCounts(c *C) {
+	// Create a new consumer on test1
+	topic := "test1"
+	cn := s.NewTestConsumer(s.m, []string{topic})
+	defer cn.Terminate(true)
+	s.cn = cn
+
+	// Claim the only partition
+	s.cn.claimPartitions()
+	c.Assert(s.cn.getNumActiveClaims(), Equals, 1)
+
+	// Increase number of partitions
+	MakeTopic(s.s, "test1", 2)
+	s.m.cluster.refreshMetadata()
+
+	// Verify that the consumer claims the new partition
+	s.cn.updatePartitionCounts()
+	s.cn.claimPartitions()
+	c.Assert(s.cn.getNumActiveClaims(), Equals, 2)
+}
+
 func (s *ConsumerSuite) TestConsumerRemovesSelfFromMarshal(c *C) {
 	// Test that Consumers remove themselves from the associated Marshal.
 	s.m.addNewConsumer(s.cn)
