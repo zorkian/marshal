@@ -505,10 +505,22 @@ func (c *Consumer) updateTopicClaims(latestClaims map[string]bool, force bool) {
 	}
 }
 
+// updatePartitionCounts pulls the latest partition counts per topic from the Marshaler
+func (c *Consumer) updatePartitionCounts() {
+	for _, topic := range c.marshal.Topics() {
+		// Only update partitions for topics we already know about
+		if _, ok := c.partitions[topic]; ok {
+			c.partitions[topic] = c.marshal.Partitions(topic)
+		}
+	}
+}
+
 // manageClaims is our internal state machine that handles partitions and claiming new
 // ones (or releasing ones).
 func (c *Consumer) manageClaims() {
 	for !c.Terminated() {
+		c.updatePartitionCounts()
+
 		// Attempt to claim more partitions, this always runs and will keep running until all
 		// partitions in the topic are claimed (by somebody).
 		if c.options.ClaimEntireTopic {
