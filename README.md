@@ -213,10 +213,10 @@ partition's claim will start to become stale. From the perspective of
 the rest of the fleet, they will have to wait an appropriate interval
 (two heartbeats) until they can claim the partition.
 
-Data might be skipped or double-consumed, but the maximum amount is one
-heartbeat's worth. Depending on the last time you heartbeated, at worst
-you will see that many messages be double-consumed. The downtime of
-consumption is also up to two heartbeat intervals at worst.
+Data might be double-consumed, but the maximum amount is one heartbeat's
+worth. Depending on the last time you heartbeated, at worst you will see
+that many messages be double-consumed. The downtime of consumption is
+also up to two heartbeat intervals at worst.
 
 ### Network Partitions
 
