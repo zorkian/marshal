@@ -26,7 +26,7 @@ func (s *ClaimSuite) SetUpTest(c *C) {
 	var err error
 	s.m, err = NewMarshaler("cl", "gr", []string{s.s.Addr()})
 	c.Assert(err, IsNil)
-	s.cl = newClaim("test16", 0, s.m, s.ch, NewConsumerOptions())
+	s.cl = newClaim("test16", 0, s.m, nil, s.ch, NewConsumerOptions())
 	c.Assert(s.cl, NotNil)
 }
 

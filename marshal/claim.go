@@ -42,13 +42,14 @@ type claim struct {
 	messagesLock  *sync.Mutex
 	offsets       PartitionOffsets
 	marshal       *Marshaler
+	consumer      *Consumer
 	rand          *rand.Rand
 	claimed       *int32
 	terminated    *int32
 	beatCounter   int32
 	lastHeartbeat int64
 	options       ConsumerOptions
-	consumer      kafka.Consumer
+	kafkaConsumer kafka.Consumer
 	messages      chan *Message
 
 	// tracking is a dict that maintains information about offsets that have been
@@ -70,7 +71,7 @@ type claim struct {
 
 // newClaim returns an internal claim object, used by the consumer to manage the
 // claim of a single partition.
-func newClaim(topic string, partID int, marshal *Marshaler,
+func newClaim(topic string, partID int, marshal *Marshaler, consumer *Consumer,
 	messages chan *Message, options ConsumerOptions) *claim {
 	// Get all available offset information
 	offsets, err := marshal.GetPartitionOffsets(topic, partID)
@@ -102,6 +103,7 @@ func newClaim(topic string, partID int, marshal *Marshaler,
 		lock:         &sync.RWMutex{},
 		messagesLock: &sync.Mutex{},
 		marshal:      marshal,
+		consumer:     consumer,
 		topic:        topic,
 		partID:       partID,
 		claimed:      new(int32),
@@ -165,7 +167,7 @@ func (c *claim) setup() {
 		atomic.StoreInt32(c.claimed, 0)
 		return
 	}
-	c.consumer = kafkaConsumer
+	c.kafkaConsumer = kafkaConsumer
 
 	// Start our maintenance goroutines that keep this system healthy
 	go c.healthCheckLoop()
@@ -241,7 +243,7 @@ func (c *claim) Terminate() bool {
 	return c.teardown(false)
 }
 
-// internal function that will teardown the claim. It may release the partition or
+// teardown handles releasing the claim or just updating our offsets for a fast restart.
 func (c *claim) teardown(releasePartition bool) bool {
 	if !atomic.CompareAndSwapInt32(c.terminated, 0, 1) {
 		return false
@@ -259,6 +261,13 @@ func (c *claim) teardown(releasePartition bool) bool {
 	// is reasonable. Held because of using offsetCurrent below.
 	c.lock.RLock()
 	defer c.lock.RUnlock()
+
+	// Advise the consumer that this claim is terminating, this is so that the consumer
+	// can release other claims if we've lost part of a topic
+	if c.consumer != nil {
+		go c.consumer.claimTerminated(c, releasePartition)
+	}
+
 	var err error
 	if releasePartition {
 		log.Infof("[%s:%d] releasing partition claim", c.topic, c.partID)
@@ -282,7 +291,7 @@ func (c *claim) messagePump() {
 	// be running while someone else has the lock, and we can't get it ourselves, we are
 	// forbidden to touch anything other than the consumer and the message channel.
 	for c.Claimed() {
-		msg, err := c.consumer.Consume()
+		msg, err := c.kafkaConsumer.Consume()
 		if err == proto.ErrOffsetOutOfRange {
 			// Fell out of range, presumably because we're handling this too slow, so
 			// let's abandon this consumer

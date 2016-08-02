@@ -26,22 +26,25 @@ type ConsumerSuite struct {
 
 func (s *ConsumerSuite) NewTestConsumer(m *Marshaler, topics []string) *Consumer {
 	cn := &Consumer{
-		alive:           new(int32),
-		marshal:         m,
-		topics:          topics,
-		options:         NewConsumerOptions(),
-		partitions:      make(map[string]int),
-		rand:            rand.New(rand.NewSource(time.Now().UnixNano())),
-		claims:          make(map[string]map[int]*claim),
-		messages:        make(chan *Message, 1000),
-		claimedTopics:   make(map[string]bool),
-		topicClaimsChan: make(chan map[string]bool, 1),
+		alive:              new(int32),
+		marshal:            m,
+		topics:             topics,
+		options:            NewConsumerOptions(),
+		partitions:         make(map[string]int),
+		rand:               rand.New(rand.NewSource(time.Now().UnixNano())),
+		claims:             make(map[string]map[int]*claim),
+		messages:           make(chan *Message, 1000),
+		topicClaimsChan:    make(chan map[string]bool, 1),
+		topicClaimsUpdated: make(chan struct{}, 1),
 	}
 
 	for _, topic := range topics {
 		cn.partitions[topic] = m.Partitions(topic)
 	}
 	atomic.StoreInt32(cn.alive, 1)
+
+	go cn.sendTopicClaimsLoop()
+
 	return cn
 }
 
@@ -269,6 +272,15 @@ func (s *ConsumerSuite) TestTopicClaimPartial(c *C) {
 	c.Assert(s.m2.cluster.waitForRsteps(7), Equals, 7)
 	c.Assert(cnbl.getNumActiveClaims(), Equals, 0)
 	c.Assert(cn.getNumActiveClaims(), Equals, 2)
+
+	// Now we release claim 1 and make sure both get released (this is the healthy
+	// release case where we lose 1 partition and we want to make sure we release
+	// all partitions)
+	c.Assert(cn.claims[topic][1].Release(), Equals, true)
+	c.Assert(s.m.cluster.waitForRsteps(9), Equals, 9)
+	c.Assert(s.m.GetPartitionClaim(topic, 0).LastHeartbeat, Equals, int64(0))
+	c.Assert(s.m.GetPartitionClaim(topic, 1).LastHeartbeat, Equals, int64(0))
+
 }
 
 func (s *ConsumerSuite) TestMultiTopicClaim(c *C) {
