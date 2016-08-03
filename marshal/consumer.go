@@ -240,7 +240,6 @@ func (c *Consumer) defaultTopicPartitions() int {
 // false. Returns true only if the partition was never claimed and we succeeded in
 // claiming it.
 func (c *Consumer) tryClaimPartition(topic string, partID int) bool {
-
 	if c.options.ClaimEntireTopic {
 		if c.isTopicClaimLimitReached(topic) {
 			return false
@@ -290,7 +289,7 @@ func (c *Consumer) tryClaimPartition(topic string, partID int) bool {
 				log.Errorf("This is a catastrophic error. We're terminating Marshal.")
 				log.Errorf("No further messages will be available. Please restart.")
 				c.marshal.PrintState()
-				c.marshal.Terminate()
+				go c.marshal.Terminate()
 			}
 		}
 	}
