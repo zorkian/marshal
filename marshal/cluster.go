@@ -58,6 +58,7 @@ type KafkaCluster struct {
 // that all use the same cluster.
 func Dial(name string, brokers []string) (*KafkaCluster, error) {
 	brokerConf := kafka.NewBrokerConf("PortalMarshal")
+	brokerConf.MetadataRefreshFrequency = time.Hour
 	broker, err := kafka.Dial(brokers, brokerConf)
 	if err != nil {
 		return nil, err
