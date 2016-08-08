@@ -57,7 +57,7 @@ type Marshaler struct {
 // creating multiple marshalers in your program, you should instead call Dial and then use
 // the NewMarshaler method on that object.
 func NewMarshaler(clientID, groupID string, brokers []string) (*Marshaler, error) {
-	cluster, err := Dial("automatic", brokers)
+	cluster, err := Dial("automatic", brokers, NewMarshalOptions())
 	if err != nil {
 		return nil, err
 	}

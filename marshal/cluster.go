@@ -33,6 +33,7 @@ type KafkaCluster struct {
 	producer   kafka.Producer
 	partitions int
 	jitters    chan time.Duration
+	options    MarshalOptions
 
 	// Lock protects the following members; you must have this lock in order to
 	// read from or write to these.
@@ -54,10 +55,42 @@ type KafkaCluster struct {
 	ts int64
 }
 
+// MarshalOptions contains various tunables that can be used to adjust the configuration
+// of the underlying system.
+type MarshalOptions struct {
+	// BrokerConnectionLimit is used to set the maximum simultaneous number of connections
+	// that can be made to each broker.
+	// Default: 30.
+	BrokerConnectionLimit int
+
+	// ConsumeRequestTimeout sets the time that we ask Kafka to wait before returning any
+	// data to us. Setting this high uses more connections and can lead to some latency
+	// but keeps the load on Kafka minimal. Use this to balance QPS against latency.
+	// Default: 3 seconds.
+	ConsumeRequestTimeout time.Duration
+
+	// MarshalRequestTimeout is used for our coordination requests. This should be reasonable
+	// at default, but is left as a tunable in case you have clients that are claiming an
+	// extremely large number of partitions and are too slow.
+	// Default: 1 second.
+	MarshalRequestTimeout time.Duration
+}
+
+// NewMarshalOptions returns a set of MarshalOptions populated with defaults.
+func NewMarshalOptions() MarshalOptions {
+	return MarshalOptions{
+		BrokerConnectionLimit: 30,
+		ConsumeRequestTimeout: 3 * time.Second,
+		MarshalRequestTimeout: 1 * time.Second,
+	}
+}
+
 // Dial returns a new cluster object which can be used to instantiate a number of Marshalers
-// that all use the same cluster.
-func Dial(name string, brokers []string) (*KafkaCluster, error) {
+// that all use the same cluster. You may pass brokerConf or may set it to nil.
+func Dial(name string, brokers []string, options MarshalOptions) (*KafkaCluster, error) {
+	// Connect to Kafka
 	brokerConf := kafka.NewBrokerConf("PortalMarshal")
+	brokerConf.ConnectionLimit = options.BrokerConnectionLimit
 	broker, err := kafka.Dial(brokers, brokerConf)
 	if err != nil {
 		return nil, err
@@ -67,6 +100,7 @@ func Dial(name string, brokers []string) (*KafkaCluster, error) {
 		quit:     new(int32),
 		rsteps:   new(int32),
 		name:     name,
+		options:  options,
 		broker:   broker,
 		producer: broker.Producer(kafka.NewProducerConf()),
 		topics:   make(map[string]int),
