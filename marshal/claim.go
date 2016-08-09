@@ -153,9 +153,7 @@ func (c *claim) setup() {
 	// Set up Kafka consumer
 	consumerConf := kafka.NewConsumerConf(c.topic, int32(c.partID))
 	consumerConf.StartOffset = c.offsets.Current
-	// Long-poll fetch for a few seconds. This balances the QPS against Kafka with the
-	// number of connections we have to tie up.
-	consumerConf.RequestTimeout = 3 * time.Second
+	consumerConf.RequestTimeout = c.marshal.cluster.options.ConsumeRequestTimeout
 	// Do not retry. If we get back no data, we'll do our own retries.
 	consumerConf.RetryLimit = 0
 	kafkaConsumer, err := c.marshal.cluster.broker.Consumer(consumerConf)
