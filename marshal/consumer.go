@@ -71,6 +71,10 @@ type ConsumerOptions struct {
 	// consumption parallelism.
 	StrictOrdering bool
 
+	// ReleaseClaimsIfBehind indicates whether to release a claim if a consumer
+	// is consuming at a rate slower than the partition is being produced to.
+	ReleaseClaimsIfBehind bool
+
 	// The maximum number of claims this Consumer is allowed to hold simultaneously.
 	// MaximumClaims indicates the maximum number of partitions to be claimed when
 	// ClaimEntireTopic is set to false. Otherwise, it indicates the maximum number
@@ -196,17 +200,20 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 // NewConsumerOptions returns a default set of options for the Consumer.
 func NewConsumerOptions() ConsumerOptions {
 	return ConsumerOptions{
-		FastReclaim:      true,
-		ClaimEntireTopic: false,
-		GreedyClaims:     false,
-		StrictOrdering:   false,
+		FastReclaim:           true,
+		ClaimEntireTopic:      false,
+		GreedyClaims:          false,
+		StrictOrdering:        false,
+		ReleaseClaimsIfBehind: true,
 	}
 }
 
 func (c *Consumer) defaultTopic() string {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	if len(c.partitions) > 1 {
 		log.Errorf("attempted to claim partitions for more than one topic")
-		c.Terminate(false)
+		go c.Terminate(false)
 		return ""
 	}
 
@@ -215,14 +222,16 @@ func (c *Consumer) defaultTopic() string {
 	}
 
 	log.Errorf("couldn't find default topic!")
-	c.Terminate(false)
+	go c.Terminate(false)
 	return ""
 }
 
 func (c *Consumer) defaultTopicPartitions() int {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	if len(c.partitions) > 1 {
 		log.Errorf("attempted to claim partitions for more than one topic")
-		c.Terminate(false)
+		go c.Terminate(false)
 		return 0
 	}
 
@@ -231,7 +240,7 @@ func (c *Consumer) defaultTopicPartitions() int {
 	}
 
 	log.Errorf("couldn't find default topic!")
-	c.Terminate(false)
+	go c.Terminate(false)
 	return 0
 }
 
@@ -315,11 +324,14 @@ func (c *Consumer) rndIntn(n int) int {
 // set on aggressive, this will try to claim ALL partitions that are free. Balanced mode
 // will claim a single partition.
 func (c *Consumer) claimPartitions() {
-	if len(c.partitions) > 1 {
-		log.Errorf("attempted to claim partitions for more than a single topic")
-		c.Terminate(false)
-		return
-	}
+	func() {
+		c.lock.RLock()
+		defer c.lock.RUnlock()
+		if len(c.partitions) > 1 {
+			log.Errorf("attempted to claim partitions for more than a single topic")
+			go c.Terminate(false)
+		}
+	}()
 
 	topic := c.defaultTopic()
 	partitions := c.defaultTopicPartitions()
@@ -528,6 +540,8 @@ func (c *Consumer) updateTopicClaims(latestClaims map[string]bool, force bool) {
 
 // updatePartitionCounts pulls the latest partition counts per topic from the Marshaler
 func (c *Consumer) updatePartitionCounts() {
+	c.lock.Lock()
+	defer c.lock.Unlock()
 	for _, topic := range c.marshal.Topics() {
 		// Only update partitions for topics we already know about
 		if _, ok := c.partitions[topic]; ok {
