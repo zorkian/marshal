@@ -70,7 +70,9 @@ type claim struct {
 }
 
 // newClaim returns an internal claim object, used by the consumer to manage the
-// claim of a single partition.
+// claim of a single partition. It is up to the caller to ensure healthCheckLoop gets
+// called in a goroutine. If you do not, the claim will die from failing to heartbeat
+// after a short period.
 func newClaim(topic string, partID int, marshal *Marshaler, consumer *Consumer,
 	messages chan *Message, options ConsumerOptions) *claim {
 	// Get all available offset information
@@ -170,7 +172,6 @@ func (c *claim) setup() {
 	c.kafkaConsumer = kafkaConsumer
 
 	// Start our maintenance goroutines that keep this system healthy
-	go c.healthCheckLoop()
 	go c.messagePump()
 
 	// Totally done, let the world know and move on

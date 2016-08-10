@@ -241,12 +241,34 @@ func (s *ClaimSuite) TestCommitOutstanding(c *C) {
 	c.Assert(s.cl.offsets.Earliest, Equals, int64(0))
 	c.Assert(s.cl.offsets.Latest, Equals, int64(6))
 
+	// This test requires all messages to have been consumed into the channel, else
+	// we can get inconsistent results
+	readyChan := make(chan struct{})
+	go func() {
+		defer close(readyChan)
+		for {
+			s.cl.lock.RLock()
+			if len(s.cl.messages) == 6 {
+				s.cl.lock.RUnlock()
+				break
+			}
+			s.cl.lock.RUnlock()
+
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	select {
+	case <-readyChan:
+		// all good, continue
+	case <-time.After(3 * time.Second):
+		// Timeout reached, we've failed
+		c.FailNow()
+	}
+
 	// Consume 1, heartbeat... offsets still 0
 	msg1 := s.consumeOne(c)
 	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
 	c.Assert(s.cl.Commit(msg1.Offset), IsNil)
-	// TODO: There's a race here. If the background goroutine decides to run a health check
-	// here it will consume our offset and this test fails. It's rare but possible.
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 6)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 

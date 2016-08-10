@@ -310,6 +310,7 @@ func (c *Consumer) tryClaimPartition(topic string, partID int) bool {
 	if newClaim == nil {
 		return false
 	}
+	go newClaim.healthCheckLoop()
 
 	// Critical section. Engage the lock here, we hold it until we exit.
 	c.lock.Lock()
@@ -677,6 +678,9 @@ func (c *Consumer) Terminate(release bool) bool {
 // GetCurrentTopicClaims returns the topics that are currently claimed by this
 // consumer. It should be relevent only when ClaimEntireTopic is set
 func (c *Consumer) GetCurrentTopicClaims() (map[string]bool, error) {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
 	if !c.options.ClaimEntireTopic {
 		return nil, errors.New(
 			"GetCurrentTopicClaims requires options.ClaimEntireTopic be set")
@@ -686,9 +690,6 @@ func (c *Consumer) GetCurrentTopicClaims() (map[string]bool, error) {
 	if c.Terminated() {
 		return claimedTopics, nil
 	}
-
-	c.lock.RLock()
-	defer c.lock.RUnlock()
 
 	// Iterate each topic we know about and see if we have partition 0 claimed
 	// for that topic, if so, consider it valid
