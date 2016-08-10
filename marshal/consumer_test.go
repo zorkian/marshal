@@ -116,6 +116,44 @@ func (s *ConsumerSuite) TestNewConsumer(c *C) {
 	c.Assert(err, NotNil)
 }
 
+func (s *ConsumerSuite) TestFlush(c *C) {
+	options := NewConsumerOptions()
+	options.GreedyClaims = true
+
+	cn, err := s.m.NewConsumer([]string{"test2"}, options)
+	c.Assert(err, IsNil)
+	defer cn.Terminate(true)
+
+	// Wait for 4 messages to be processed
+	c.Assert(s.m.cluster.waitForRsteps(4), Equals, 4)
+	c.Assert(s.m.GetPartitionClaim("test2", 0).LastHeartbeat, Not(Equals), int64(0))
+	c.Assert(s.m.GetPartitionClaim("test2", 1).LastHeartbeat, Not(Equals), int64(0))
+
+	// Produce and consume some messages
+	s.Produce("test2", 0, "m1", "m2", "m3")
+	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m1"))
+	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m2"))
+	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m3"))
+
+	s.Produce("test2", 1, "m4", "m5")
+	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m4"))
+	c.Assert(cn.consumeOne().Value, DeepEquals, []byte("m5"))
+
+	// Ensure all offsets are as expected (i.e. no heartbeat/flush yet, so
+	// offsets are 0)
+	c.Assert(cn.claims["test2"][0].offsets.Latest, Equals, int64(0))
+	c.Assert(cn.claims["test2"][1].offsets.Latest, Equals, int64(0))
+	c.Assert(cn.claims["test2"][0].offsets.Current, Equals, int64(0))
+	c.Assert(cn.claims["test2"][1].offsets.Current, Equals, int64(0))
+
+	// Now flush, this updates the Current offsets but not Latest
+	c.Assert(cn.Flush(), IsNil)
+	c.Assert(cn.claims["test2"][0].offsets.Latest, Equals, int64(0))
+	c.Assert(cn.claims["test2"][1].offsets.Latest, Equals, int64(0))
+	c.Assert(cn.claims["test2"][0].offsets.Current, Equals, int64(3))
+	c.Assert(cn.claims["test2"][1].offsets.Current, Equals, int64(2))
+}
+
 func (s *ConsumerSuite) TestTerminateWithRelease(c *C) {
 	// Termination is supposed to release active claims that we have, ensure that
 	// this happens

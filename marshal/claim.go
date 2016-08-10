@@ -229,6 +229,34 @@ func (c *claim) GetCurrentLag() int64 {
 	return 0
 }
 
+// Flush will write updated offsets to Kafka immediately if we have any outstanding offset
+// updates to write. If not, this is a relatively quick no-op.
+func (c *claim) Flush() error {
+	// By definition a terminated claim has already flushed anything it can flush
+	// or we've lost the lock so there's nothing we can do. It's not an error.
+	if c.Terminated() {
+		return nil
+	}
+
+	// This is technically a racey design, but the worst case is that we
+	// will write out two correct heartbeats which is fine.
+	if !c.updateCurrentOffsets() {
+		// Current offset did not advance
+		return nil
+	}
+
+	// Lock held because we use c.offsets
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	// Now heartbeat this value and update our heartbeat time
+	if err := c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current); err != nil {
+		go c.Release()
+		return fmt.Errorf("[%s:%d] failed to flush, releasing: %s", c.topic, c.partID, err)
+	}
+	return nil
+}
+
 // Release will invoke commit offsets and release the Kafka partition. After calling Release,
 // consumer cannot consume messages anymore
 func (c *claim) Release() bool {
@@ -367,9 +395,10 @@ func (c *claim) heartbeat() bool {
 	return true
 }
 
-// updateCurrentOffsets updates the current offsets so that a Commit/Heartbeat can pick up the latest
-// offsets
-func (c *claim) updateCurrentOffsets() {
+// updateCurrentOffsets updates the current offsets so that a Commit/Heartbeat can pick up the
+// latest offsets. Returns true if we advanced our current offset, false if there was no
+// change.
+func (c *claim) updateCurrentOffsets() bool {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
@@ -382,12 +411,14 @@ func (c *claim) updateCurrentOffsets() {
 
 	// Now iterate the offsets bottom up and increment our current offset until we
 	// see the first uncommitted offset (oldest message)
+	didAdvance := false
 	for _, offset := range offsets {
 		if !c.tracking[offset] {
 			break
 		}
-		// Remember current is always "last processed + 1", see the docs on
+		// Remember current is always "last committed + 1", see the docs on
 		// PartitionOffset for a reminder.
+		didAdvance = true
 		c.offsets.Current = offset + 1
 		delete(c.tracking, offset)
 	}
@@ -399,6 +430,7 @@ func (c *claim) updateCurrentOffsets() {
 		log.Errorf("[%s:%d] has %d uncommitted offsets. You must call Commit.",
 			c.topic, c.partID, len(c.tracking))
 	}
+	return didAdvance
 }
 
 // healthCheck performs a single health check against the claim. If we have failed

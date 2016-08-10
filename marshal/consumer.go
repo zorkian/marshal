@@ -727,11 +727,10 @@ func (c *Consumer) consumeOne() *Message {
 	return msg
 }
 
-// Commit is called when you've finished processing a message. In the at-least-once
-// consumption case, this will allow the "last processed offset" to move forward so that
-// we can never see this message again. This operation does nothing for at-most-once
-// consumption, as the commit happens in the Consume phase.
-// TODO: AMO description is wrong.
+// Commit is called when you've finished processing a message. This operation marks
+// the offset as committed internally and is suitable for at-least-once processing
+// because we do not immediately write the offsets to storage. We will flush the
+// offsets periodically (based on the heartbeat interval).
 func (c *Consumer) Commit(msg *Message) error {
 	cl, ok := func() (*claim, bool) {
 		c.lock.RLock()
@@ -744,6 +743,51 @@ func (c *Consumer) Commit(msg *Message) error {
 		return errors.New("Message not committed (partition claim expired).")
 	}
 	return cl.Commit(msg.Offset)
+}
+
+// Flush will cause us to upate all of the committed offsets. This operation can be
+// performed to periodically sync offsets without waiting on the internal flushing mechanism.
+func (c *Consumer) Flush() error {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	claims := make([]*claim, 0)
+	for topic, _ := range c.claims {
+		for partID, _ := range c.claims[topic] {
+			claims = append(claims, c.claims[topic][partID])
+		}
+	}
+
+	// Do flushing concurrently because they involve sending messages to Kafka
+	// which can be slow if done serially
+	waiter := &sync.WaitGroup{}
+	waiter.Add(len(claims))
+	errChan := make(chan error, len(claims))
+
+	for _, cl := range claims {
+		cl := cl
+		go func() {
+			defer waiter.Done()
+			if err := cl.Flush(); err != nil {
+				errChan <- err
+			}
+		}()
+	}
+
+	// Wait for all flushes to finish
+	waiter.Wait()
+	close(errChan)
+
+	// Channel will be empty unless there was an error
+	anyErrors := false
+	for err := range errChan {
+		anyErrors = true
+		log.Errorf("Flush error: %s", err)
+	}
+	if anyErrors {
+		return errors.New("One or more errors encountered flushing offsets.")
+	}
+	return nil
 }
 
 // CommitByToken is called when you've finished processing a message. In the at-least-once
