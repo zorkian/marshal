@@ -137,6 +137,95 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 0)
 }
 
+func (s *ClaimSuite) TestFlush(c *C) {
+	// Test the commit message flow, ensuring that our offset only gets updated when
+	// we have properly committed messages
+	//
+	// Basically the same as the heartbeat test, since a flush triggers a heartbeat
+	c.Assert(s.Produce("test16", 0, "m1", "m2", "m3", "m4", "m5", "m6"), Equals, int64(5))
+	c.Assert(s.cl.updateOffsets(), IsNil)
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	c.Assert(s.cl.offsets.Earliest, Equals, int64(0))
+	c.Assert(s.cl.offsets.Latest, Equals, int64(6))
+
+	// Consume 1, Flush... offsets still 0
+	msg1 := s.consumeOne(c)
+	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
+	c.Assert(s.cl.Flush(), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	s.cl.lock.RLock()
+	c.Assert(s.cl.tracking[0], Equals, false)
+	s.cl.lock.RUnlock()
+
+	// Consume 2, still 0
+	msg2 := s.consumeOne(c)
+	c.Assert(msg2.Value, DeepEquals, []byte("m2"))
+	c.Assert(s.cl.Flush(), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+
+	// Commit 1, offset 1 but only after Flush phase
+	c.Assert(s.cl.Commit(msg1.Offset), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	c.Assert(s.cl.Flush(), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
+
+	// Produce some more
+	c.Assert(s.Produce("test16", 0, "m7"), Equals, int64(6))
+
+	// Consume 3, Flush, offset 1
+	msg3 := s.consumeOne(c)
+	c.Assert(msg3.Value, DeepEquals, []byte("m3"))
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(s.cl.Flush(), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+
+	// Assert that the above didn't update the Latest offset, the Flush
+	// flow doesn't (unlike heartbeat which does)
+	c.Assert(s.cl.offsets.Latest, Equals, int64(6))
+
+	// Commit #3, offset will stay 1!
+	c.Assert(s.cl.Commit(msg3.Offset), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(s.cl.Flush(), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
+
+	// Now a heartbeat happens, it should change nothing except Latest
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
+	c.Assert(s.cl.offsets.Latest, Equals, int64(7))
+
+	// Commit #2, offset now advances to 3
+	c.Assert(s.cl.Commit(msg2.Offset), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(1))
+	c.Assert(s.cl.Flush(), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(3))
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 3)
+
+	// Attempt to commit invalid offset (never seen), make sure it errors
+	msg3.Offset = 95
+	c.Assert(s.cl.Commit(msg3.Offset), NotNil)
+
+	// Commit the rest
+	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
+	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
+	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(3))
+	c.Assert(s.cl.Flush(), IsNil)
+	c.Assert(s.cl.offsets.Current, Equals, int64(6))
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 0)
+
+	// One last heartbeat, should be no change from the above Flush since
+	// nothing has happened
+	c.Assert(s.cl.heartbeat(), Equals, true)
+	c.Assert(s.cl.offsets.Current, Equals, int64(6))
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 0)
+	c.Assert(s.cl.offsets.Latest, Equals, int64(7))
+}
+
 func (s *ClaimSuite) TestOrderedConsume(c *C) {
 	// Turn on ordered consumption
 	s.cl.options.StrictOrdering = true
