@@ -94,11 +94,15 @@ type ConsumerOptions struct {
 // processes as might be consuming from this topic. However, you should ONLY create one
 // Consumer per topic in your application!
 type Consumer struct {
-	alive              *int32
-	marshal            *Marshaler
-	topics             []string
-	options            ConsumerOptions
-	messages           chan *Message
+	alive    *int32
+	marshal  *Marshaler
+	topics   []string
+	options  ConsumerOptions
+	messages chan *Message
+
+	// These are used to manage topic claim notifications. These notifications are
+	// sent only when a topic claim changes state: i.e., you can assert that when
+	// receiving a notification there is some change to the global state.
 	topicClaimsChan    chan map[string]bool
 	topicClaimsUpdated chan struct{}
 
@@ -139,7 +143,7 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 		messages:           make(chan *Message, 10000),
 		rand:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		claims:             make(map[string]map[int]*claim),
-		topicClaimsChan:    make(chan map[string]bool, 1),
+		topicClaimsChan:    make(chan map[string]bool),
 		topicClaimsUpdated: make(chan struct{}, 1),
 	}
 	atomic.StoreInt32(c.alive, 1)
@@ -261,6 +265,9 @@ func (c *Consumer) claimTerminated(cl *claim, released bool) {
 		return
 	}
 
+	// Send an update at the end
+	defer c.sendTopicClaimsUpdate()
+
 	// This is a topic claim, so we need to perform the same operation on the rest of
 	// the claims in this topic
 	c.lock.RLock()
@@ -274,7 +281,6 @@ func (c *Consumer) claimTerminated(cl *claim, released bool) {
 			}
 		}
 	}
-	c.sendTopicClaimsUpdate()
 }
 
 // tryClaimPartition attempts to claim a partition and make it available in the consumption
@@ -437,6 +443,9 @@ func (c *Consumer) isTopicClaimLimitReached(topic string) bool {
 // as the key, anybody who has that partition has claimed the entire topic. This requires all
 // consumers to use this mode.
 func (c *Consumer) claimTopics() {
+	// Whenever we're done here, try to send an update
+	defer c.sendTopicClaimsUpdate()
+
 	// Get a copy of c.partitions so we don't have to hold the lock throughout
 	// this entire method
 	topic_partitions := make(map[string]int)
@@ -463,7 +472,6 @@ func (c *Consumer) claimTopics() {
 			if lastClaim.GroupID != c.marshal.groupID ||
 				lastClaim.ClientID != c.marshal.clientID {
 				// in case we had this topic, but now somebody else has claimed it
-				c.sendTopicClaimsUpdate()
 				continue
 			}
 		} else {
@@ -484,7 +492,9 @@ func (c *Consumer) claimTopics() {
 				continue
 			}
 			log.Infof("[%s] claimed topic (key partition 0) successfully\n", topic)
-			// a new partition claim, let's send topic claim notification if necessary
+
+			// Optimistically send update to try to reduce latency between us claiming a
+			// topic and notifying a listener
 			c.sendTopicClaimsUpdate()
 		}
 
@@ -513,10 +523,13 @@ func (c *Consumer) sendTopicClaimsUpdate() {
 	}
 }
 
-// topicClaimsLoop sends an updated topic claim map every time we get a notification.
+// topicClaimsLoop analyzes the current topic claims and sends an update if
+// and only if there is a change in claim state. I.e., a new topic is claimed
+// or a topic is released.
 func (c *Consumer) sendTopicClaimsLoop() {
 	defer close(c.topicClaimsChan)
 
+	lastClaims, _ := c.GetCurrentTopicClaims()
 	for range c.topicClaimsUpdated {
 		// Get consistent claims and send them
 		claims, err := c.GetCurrentTopicClaims()
@@ -525,14 +538,35 @@ func (c *Consumer) sendTopicClaimsLoop() {
 			continue
 		}
 
-		// Drain out any unconsumed updates
-	CONSUME:
-		for {
-			select {
-			case <-c.topicClaimsChan:
-			default:
-				break CONSUME
+		// See if anything has changed
+		anyUpdates := false
+		for topic, claimed := range lastClaims {
+			stillClaimed, ok := claims[topic]
+			if !ok {
+				// Existed before but does not exist now
+				anyUpdates = true
+			} else if claimed != stillClaimed {
+				// Status changed in some way
+				anyUpdates = true
 			}
+		}
+		for topic, _ := range claims {
+			if _, ok := lastClaims[topic]; !ok {
+				// New topic claim
+				anyUpdates = true
+			}
+		}
+		lastClaims = claims
+
+		// If no updates, continue
+		if !anyUpdates {
+			continue
+		}
+
+		// Drain out any unconsumed update
+		select {
+		case <-c.topicClaimsChan:
+		default:
 		}
 
 		// This should never block since we're the only writer

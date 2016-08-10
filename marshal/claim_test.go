@@ -387,7 +387,7 @@ func (s *ClaimSuite) TestHealthCheck(c *C) {
 	// If we are okay with CV<PV we shouldn't release
 	opts := NewConsumerOptions()
 	opts.ReleaseClaimsIfBehind = false
-	s.cl = newClaim("test16", 0, s.m, s.ch, opts)
+	s.cl = newClaim("test16", 0, s.m, nil, s.ch, opts)
 	c.Assert(s.cl, NotNil)
 	s.cl.offsetLatestHistory = [10]int64{1, 10, 0, 0, 0, 0, 0, 0, 0, 0}
 	s.cl.offsetCurrentHistory = [10]int64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
