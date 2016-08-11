@@ -609,6 +609,29 @@ func (s *ConsumerSuite) TestBalancedClaim(c *C) {
 	c.Assert(s.cn.GetCurrentLoad(), Equals, 1)
 }
 
+func (s *ConsumerSuite) TestUnhealthyReclaim(c *C) {
+	cn := s.NewTestConsumer(s.m, []string{"test1"})
+	defer cn.Terminate(true)
+
+	// Claim a partition
+	c.Assert(cn.tryClaimPartition("test1", 0), Equals, true)
+	cn.claims["test1"][0].Release()
+	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
+
+	// Call ClaimPartitions, verify it does not claim
+	cn.claimPartitions()
+	c.Assert(cn.GetCurrentLoad(), Equals, 0)
+
+	// Artificially age the claim's last release time
+	s.m.cluster.lock.Lock()
+	s.m.cluster.groups[s.m.groupID]["test1"].partitions[0].LastRelease -= HeartbeatInterval
+	s.m.cluster.lock.Unlock()
+
+	// Call ClaimPartitions, verify it claims
+	cn.claimPartitions()
+	c.Assert(cn.GetCurrentLoad(), Equals, 1)
+}
+
 func (s *ConsumerSuite) TestFastReclaim(c *C) {
 	// Claim some partitions then create a new consumer with fast reclaim on; this
 	// should "reclaim" the partitions automatically at the offset they were last

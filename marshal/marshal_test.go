@@ -80,28 +80,28 @@ func (s *MarshalSuite) TestClaimPartitionIntegration(c *C) {
 	select {
 	case out := <-resp:
 		c.Assert(out, Equals, true)
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		c.Error("Timed out claiming partition")
 	}
 
 	select {
 	case out := <-resp:
 		c.Assert(out, Equals, true)
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		c.Error("Timed out claiming partition")
 	}
 
 	select {
 	case out := <-resp:
 		c.Assert(out, Equals, false)
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		c.Error("Timed out claiming partition")
 	}
 
 	select {
 	case out := <-resp:
 		c.Assert(out, Equals, true)
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		c.Error("Timed out claiming partition")
 	}
 }
