@@ -77,6 +77,7 @@ type PartitionOffsets struct {
 
 // PartitionClaim contains claim information about a given partition.
 type PartitionClaim struct {
+	LastRelease   int64
 	LastHeartbeat int64
 	LastOffset    int64
 	ClientID      string

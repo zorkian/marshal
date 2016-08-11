@@ -218,6 +218,8 @@ func (s *RationalizerSuite) TestReleaseClaim(c *C) {
 	// Now they release it at position 10
 	s.out <- releasingPartition(30, "cl", "gr", "test1", 0, 10)
 	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
+	c.Assert(s.m.GetLastPartitionClaim("test1", 0).LastHeartbeat, Equals, int64(0))
+	c.Assert(s.m.GetLastPartitionClaim("test1", 0).LastRelease, Equals, int64(30))
 
 	// They released at 30, should be free as of 31
 	s.m.cluster.ts = 31

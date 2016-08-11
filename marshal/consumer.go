@@ -355,14 +355,20 @@ func (c *Consumer) claimPartitions() {
 			continue
 		}
 
-		// If the last claim was by this particular consumer, skip it; this is because
-		// we might have become unhealthy and dropped it or we might already be
-		// claiming this partition
+		// If the last claim was by this particular consumer, skip if we just released.
+		// This is because we might have become unhealthy and dropped it or we might already be
+		// claiming this partition.
 		if lastClaim.GroupID == c.marshal.groupID &&
 			lastClaim.ClientID == c.marshal.clientID {
-			log.Infof("skipping unclaimed partition %s:%d because we previously released it",
-				topic, partID)
-			continue
+			// Check release time, if it's over a heartbeat interval allow us to reclaim it
+			if time.Now().Unix()-lastClaim.LastRelease < HeartbeatInterval {
+				log.Infof("[%s:%d] skipping unclaimed partition because we recently released it",
+					topic, partID)
+				continue
+			} else {
+				log.Infof("[%s:%d] reclaiming because we released it a while ago",
+					topic, partID)
+			}
 		}
 
 		// Unclaimed, so attempt to claim it

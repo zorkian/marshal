@@ -170,6 +170,7 @@ func (c *KafkaCluster) updateClaim(msg *msgHeartbeat) {
 	topic.partitions[msg.PartID].GroupID = msg.GroupID
 	topic.partitions[msg.PartID].LastOffset = msg.LastOffset
 	topic.partitions[msg.PartID].LastHeartbeat = int64(msg.Time)
+	topic.partitions[msg.PartID].LastRelease = 0
 }
 
 // releaseClaim is called whenever someone has released their claim on a partition.
@@ -191,6 +192,7 @@ func (c *KafkaCluster) releaseClaim(msg *msgReleasingPartition) {
 	// which means this is no longer claimed
 	topic.partitions[msg.PartID].LastOffset = msg.LastOffset
 	topic.partitions[msg.PartID].LastHeartbeat = 0
+	topic.partitions[msg.PartID].LastRelease = int64(msg.Time)
 }
 
 // handleClaim is called whenever we see a ClaimPartition message.
@@ -222,6 +224,7 @@ func (c *KafkaCluster) handleClaim(msg *msgClaimingPartition) {
 	topic.partitions[msg.PartID].GroupID = msg.GroupID
 	topic.partitions[msg.PartID].LastOffset = 0 // not present in this message, reset.
 	topic.partitions[msg.PartID].LastHeartbeat = int64(msg.Time)
+	topic.partitions[msg.PartID].LastRelease = 0
 }
 
 // rationalize is a goroutine that constantly consumes from a given partition of the marshal
