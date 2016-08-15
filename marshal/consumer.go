@@ -94,21 +94,23 @@ type ConsumerOptions struct {
 // processes as might be consuming from this topic. However, you should ONLY create one
 // Consumer per topic in your application!
 type Consumer struct {
-	alive      *int32
-	marshal    *Marshaler
-	topics     []string
-	partitions map[string]int
-	rand       *rand.Rand
-	options    ConsumerOptions
-	messages   chan *Message
+	alive    *int32
+	marshal  *Marshaler
+	topics   []string
+	options  ConsumerOptions
+	messages chan *Message
 
-	// claims maps partition IDs to claim structures. The lock protects read/write
-	// access to this map.
-	lock   sync.RWMutex
-	claims map[string]map[int]*claim
-	// caches the claimed topics
-	claimedTopics   map[string]bool
-	topicClaimsChan chan map[string]bool
+	// These are used to manage topic claim notifications. These notifications are
+	// sent only when a topic claim changes state: i.e., you can assert that when
+	// receiving a notification there is some change to the global state.
+	topicClaimsChan    chan map[string]bool
+	topicClaimsUpdated chan struct{}
+
+	// lock protects access to the following mutables.
+	lock       sync.RWMutex
+	rand       *rand.Rand
+	partitions map[string]int
+	claims     map[string]map[int]*claim
 }
 
 // NewConsumer instantiates a consumer object for a given topic. You must create a
@@ -133,23 +135,32 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 
 	// Construct base structure
 	c := &Consumer{
-		alive:           new(int32),
-		marshal:         m,
-		topics:          topicNames,
-		partitions:      partitions,
-		options:         options,
-		messages:        make(chan *Message, 10000),
-		rand:            rand.New(rand.NewSource(time.Now().UnixNano())),
-		claims:          make(map[string]map[int]*claim),
-		claimedTopics:   make(map[string]bool),
-		topicClaimsChan: make(chan map[string]bool, 1),
+		alive:              new(int32),
+		marshal:            m,
+		topics:             topicNames,
+		partitions:         partitions,
+		options:            options,
+		messages:           make(chan *Message, 10000),
+		rand:               rand.New(rand.NewSource(time.Now().UnixNano())),
+		claims:             make(map[string]map[int]*claim),
+		topicClaimsChan:    make(chan map[string]bool),
+		topicClaimsUpdated: make(chan struct{}, 1),
 	}
 	atomic.StoreInt32(c.alive, 1)
 	m.addNewConsumer(c)
 
+	// Take the lock for now as we're updating various points internally
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	// Start notifier about topic claims now because people are going to start
+	// listening immediately
+	go c.sendTopicClaimsLoop()
+
 	// Fast-reclaim: iterate over existing claims in the given topics and see if
 	// any of them look to be ours. Do this before the claim manager kicks off.
 	if c.options.FastReclaim {
+		claimedTopics := make(map[string]bool)
 		for topic, partitionCount := range c.partitions {
 			for partID := 0; partID < partitionCount; partID++ {
 				cl := c.marshal.GetPartitionClaim(topic, partID)
@@ -166,12 +177,11 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 					// update topic claims
 					if options.ClaimEntireTopic {
 						if partID == 0 {
-							c.claimedTopics[topic] = true
-							c.safeUpdateTopicClaims(c.claimedTopics, true)
+							claimedTopics[topic] = true
 						}
 
 						// don't fast re-claim partitions for a topic unless partition 0 is claimed
-						if !c.claimedTopics[topic] {
+						if !claimedTopics[topic] {
 							log.Infof("[%s:%d] blocked fast-reclaim because topic is not claimed",
 								topic, partID)
 							continue
@@ -179,15 +189,15 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 					}
 
 					c.claims[topic][partID] = newClaim(
-						topic, partID, c.marshal, c.messages, options)
-
+						topic, partID, c.marshal, c, c.messages, options)
+					c.sendTopicClaimsUpdate()
 				}
 			}
 
 			// this check needs to be after iterating all partitions in a topic
-			if options.ClaimEntireTopic && len(c.claimedTopics) >= options.MaximumClaims {
+			if options.ClaimEntireTopic && len(claimedTopics) >= options.MaximumClaims {
 				log.Infof("reached max-topics for fast-reclaim. Claimed topics: %v",
-					c.claimedTopics)
+					claimedTopics)
 				break
 			}
 		}
@@ -211,6 +221,7 @@ func NewConsumerOptions() ConsumerOptions {
 func (c *Consumer) defaultTopic() string {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
+
 	if len(c.partitions) > 1 {
 		log.Errorf("attempted to claim partitions for more than one topic")
 		go c.Terminate(false)
@@ -229,6 +240,7 @@ func (c *Consumer) defaultTopic() string {
 func (c *Consumer) defaultTopicPartitions() int {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
+
 	if len(c.partitions) > 1 {
 		log.Errorf("attempted to claim partitions for more than one topic")
 		go c.Terminate(false)
@@ -242,6 +254,33 @@ func (c *Consumer) defaultTopicPartitions() int {
 	log.Errorf("couldn't find default topic!")
 	go c.Terminate(false)
 	return 0
+}
+
+// claimTerminated is called by a claim when they've terminated. This is used so we can
+// ensure topic claim semantics are adhered to. In topic claim mode this will be called
+// by every claim during a release.
+func (c *Consumer) claimTerminated(cl *claim, released bool) {
+	// For now, we don't care except in the topic claim mode
+	if !c.options.ClaimEntireTopic {
+		return
+	}
+
+	// Send an update at the end
+	defer c.sendTopicClaimsUpdate()
+
+	// This is a topic claim, so we need to perform the same operation on the rest of
+	// the claims in this topic
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	for _, claim := range c.claims[cl.topic] {
+		if cl != claim {
+			if released {
+				go claim.Release()
+			} else {
+				go claim.Terminate()
+			}
+		}
+	}
 }
 
 // tryClaimPartition attempts to claim a partition and make it available in the consumption
@@ -267,10 +306,11 @@ func (c *Consumer) tryClaimPartition(topic string, partID int) bool {
 
 	// Set up internal claim structure we'll track things in, this can block for a while
 	// as it talks to Kafka and waits for rationalizers.
-	newClaim := newClaim(topic, partID, c.marshal, c.messages, c.options)
+	newClaim := newClaim(topic, partID, c.marshal, c, c.messages, c.options)
 	if newClaim == nil {
 		return false
 	}
+	go newClaim.healthCheckLoop()
 
 	// Critical section. Engage the lock here, we hold it until we exit.
 	c.lock.Lock()
@@ -338,6 +378,7 @@ func (c *Consumer) claimPartitions() {
 	if partitions <= 0 {
 		return
 	}
+
 	// Don't bother trying to make claims if we are at our claim limit.
 	// This is just an optimization, because we aren't holding the lock here
 	// this check is repeated inside tryClaimPartition.
@@ -409,22 +450,24 @@ func (c *Consumer) isTopicClaimLimitReached(topic string) bool {
 // as the key, anybody who has that partition has claimed the entire topic. This requires all
 // consumers to use this mode.
 func (c *Consumer) claimTopics() {
-	// let's make a copy of what's in c.claimedTopics
-	latestClaims := make(map[string]bool)
-	if !c.Terminated() {
-		func() {
-			c.lock.RLock()
-			defer c.lock.RUnlock()
-			for topic, claimed := range c.claimedTopics {
-				latestClaims[topic] = claimed
-			}
-		}()
-	}
+	// Whenever we're done here, try to send an update
+	defer c.sendTopicClaimsUpdate()
 
-	for topic, partitions := range c.partitions {
+	// Get a copy of c.partitions so we don't have to hold the lock throughout
+	// this entire method
+	topic_partitions := make(map[string]int)
+	func() {
+		c.lock.RLock()
+		defer c.lock.RUnlock()
+
+		for k, v := range c.partitions {
+			topic_partitions[k] = v
+		}
+	}()
+
+	// Now iterate each and try to claim
+	for topic, partitions := range topic_partitions {
 		if partitions <= 0 {
-			delete(latestClaims, topic)
-			c.safeUpdateTopicClaims(latestClaims, false)
 			continue
 		}
 
@@ -436,12 +479,8 @@ func (c *Consumer) claimTopics() {
 			if lastClaim.GroupID != c.marshal.groupID ||
 				lastClaim.ClientID != c.marshal.clientID {
 				// in case we had this topic, but now somebody else has claimed it
-				delete(latestClaims, topic)
-				c.safeUpdateTopicClaims(latestClaims, false)
 				continue
 			}
-			// topic has already been claimed. No need to send notification.
-			latestClaims[topic] = true
 		} else {
 			// Unclaimed, so attempt to claim partition 0. This is how we key topic claims.
 			log.Infof("[%s] attempting to claim topic (key partition 0)\n", topic)
@@ -460,9 +499,10 @@ func (c *Consumer) claimTopics() {
 				continue
 			}
 			log.Infof("[%s] claimed topic (key partition 0) successfully\n", topic)
-			latestClaims[topic] = true
-			// a new partition claim, let's send topic claim notification if necessary
-			c.safeUpdateTopicClaims(latestClaims, false)
+
+			// Optimistically send update to try to reduce latency between us claiming a
+			// topic and notifying a listener
+			c.sendTopicClaimsUpdate()
 		}
 
 		// We either just claimed or we have already owned the 0th partition. Let's iterate
@@ -476,78 +516,83 @@ func (c *Consumer) claimTopics() {
 	}
 }
 
-// updatesTopicClaims if changed. It should be noted that it expects c.lock.RLock
-// to be already acquired
-func (c *Consumer) safeUpdateTopicClaims(latestClaims map[string]bool, force bool) {
-	if !c.Terminated() {
-		c.lock.RLock()
-		defer c.lock.RUnlock()
-		// let's compare the new topic claims vs old ones. Upon change, we should trigger an update
-		// updateTopicClaims expects to be called with RLock held
-		c.updateTopicClaims(latestClaims, force)
+// sendTopicClaimUpdate can be called by various codepaths that have learned that there is
+// an update to send down to the users.
+func (c *Consumer) sendTopicClaimsUpdate() {
+	if c.Terminated() {
+		return
+	}
+
+	select {
+	case c.topicClaimsUpdated <- struct{}{}:
+		// Just sends a marker on the channel.
+	default:
 	}
 }
 
-// updatesTopicClaims if changed. It should be noted that it expects c.lock.RLock
-// to be already acquired
-func (c *Consumer) updateTopicClaims(latestClaims map[string]bool, force bool) {
-	changed := false
-	if force {
-		changed = true
-	} else {
-		// check for missing topic claims
-		for topic := range c.claimedTopics {
-			if !latestClaims[topic] {
-				changed = true
-				break
-			}
+// topicClaimsLoop analyzes the current topic claims and sends an update if
+// and only if there is a change in claim state. I.e., a new topic is claimed
+// or a topic is released.
+func (c *Consumer) sendTopicClaimsLoop() {
+	defer close(c.topicClaimsChan)
+
+	lastClaims, _ := c.GetCurrentTopicClaims()
+	for range c.topicClaimsUpdated {
+		// Get consistent claims and send them
+		claims, err := c.GetCurrentTopicClaims()
+		if err != nil {
+			log.Errorf("Failed to send topic claims update: %s", err)
+			continue
 		}
 
-		if !changed {
-			// let's check if something in latest that is not in claimedTopics.
-			// checking for length only is not sufficient
-			for topic := range latestClaims {
-				if !c.claimedTopics[topic] {
-					changed = true
-					break
-				}
+		// See if anything has changed
+		anyUpdates := false
+		for topic, claimed := range lastClaims {
+			stillClaimed, ok := claims[topic]
+			if !ok {
+				// Existed before but does not exist now
+				anyUpdates = true
+			} else if claimed != stillClaimed {
+				// Status changed in some way
+				anyUpdates = true
 			}
 		}
-	}
-
-	if changed {
-		log.Infof("updating topic claims: %v\n", latestClaims)
-		c.lock.RUnlock()
-		defer c.lock.RLock()
-		func() {
-			// make sure that draining the channel and writing to it
-			// happens in the same atomic operation
-			c.lock.Lock()
-			defer c.lock.Unlock()
-
-			select {
-			case <-c.topicClaimsChan:
-			default:
+		for topic, _ := range claims {
+			if _, ok := lastClaims[topic]; !ok {
+				// New topic claim
+				anyUpdates = true
 			}
+		}
+		lastClaims = claims
 
-			// let's write a copy of the map because we need to differentiate in the future
-			// between latestClaims and c.claimedTopics. We should also give out a new copy
-			// to avoid having clients modify the claims unintentionally
-			c.claimedTopics = make(map[string]bool, len(latestClaims))
-			newClaims := make(map[string]bool, len(latestClaims))
-			for topic, claimed := range latestClaims {
-				c.claimedTopics[topic] = claimed
-				newClaims[topic] = claimed
-			}
-			c.topicClaimsChan <- newClaims
-		}()
+		// If no updates, continue
+		if !anyUpdates {
+			continue
+		}
+
+		// Drain out any unconsumed update
+		select {
+		case <-c.topicClaimsChan:
+		default:
+		}
+
+		// This should never block since we're the only writer
+		c.topicClaimsChan <- claims
+
+		// This is at the end of the loop because we want to send one final update
+		// as we're exiting (which we've already done above)
+		if c.Terminated() {
+			return
+		}
 	}
 }
 
 // updatePartitionCounts pulls the latest partition counts per topic from the Marshaler
 func (c *Consumer) updatePartitionCounts() {
+	// Write lock as we're updating c.partitions below, potentially
 	c.lock.Lock()
 	defer c.lock.Unlock()
+
 	for _, topic := range c.marshal.Topics() {
 		// Only update partitions for topics we already know about
 		if _, ok := c.partitions[topic]; ok {
@@ -624,12 +669,10 @@ func (c *Consumer) terminateAndCleanup(release bool, remove bool) bool {
 		c.marshal.removeConsumer(c)
 	}
 
-	// update the claims
-	// updateTopicClaims expects to be called with RLock held
-	c.updateTopicClaims(latestTopicClaims, false)
-	close(c.topicClaimsChan)
+	// Update the claims one last time
+	c.sendTopicClaimsUpdate()
+	close(c.topicClaimsUpdated)
 	return true
-
 }
 
 // Terminate instructs the consumer to clean up and allow other consumers to begin consuming.
@@ -641,29 +684,38 @@ func (c *Consumer) Terminate(release bool) bool {
 // GetCurrentTopicClaims returns the topics that are currently claimed by this
 // consumer. It should be relevent only when ClaimEntireTopic is set
 func (c *Consumer) GetCurrentTopicClaims() (map[string]bool, error) {
-	if !c.options.ClaimEntireTopic {
-		err := fmt.Errorf("GetCurrentTopicClaims is only relevent when ClaimEntireTopic is set")
-		log.Error(err.Error())
-		return nil, err
-	}
-
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
-	// do a copy
-	latestClaims := make(map[string]bool)
-	for topic := range c.claimedTopics {
-		latestClaims[topic] = true
+	if !c.options.ClaimEntireTopic {
+		return nil, errors.New(
+			"GetCurrentTopicClaims requires options.ClaimEntireTopic be set")
 	}
 
-	return latestClaims, nil
+	claimedTopics := make(map[string]bool)
+	if c.Terminated() {
+		return claimedTopics, nil
+	}
+
+	// Iterate each topic we know about and see if we have partition 0 claimed
+	// for that topic, if so, consider it valid
+	for topic, _ := range c.partitions {
+		cl := c.marshal.GetPartitionClaim(topic, 0)
+		if cl.ClientID == c.marshal.ClientID() &&
+			cl.GroupID == c.marshal.GroupID() {
+			// We own this topic
+			claimedTopics[topic] = true
+		}
+	}
+	return claimedTopics, nil
 }
 
 // TopicClaims returns a read-only channel that receives updates for topic claims.
 // It's only relevant when CLaimEntireTopic is set
 func (c *Consumer) TopicClaims() <-chan map[string]bool {
 	if !c.options.ClaimEntireTopic {
-		err := fmt.Errorf("GetCurrentTopicClaims is only relevant when ClaimEntireTopic is set")
+		err := fmt.Errorf(
+			"GetCurrentTopicClaims is only relevant when ClaimEntireTopic is set")
 		log.Error(err.Error())
 	}
 

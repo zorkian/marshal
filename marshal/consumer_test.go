@@ -26,22 +26,25 @@ type ConsumerSuite struct {
 
 func (s *ConsumerSuite) NewTestConsumer(m *Marshaler, topics []string) *Consumer {
 	cn := &Consumer{
-		alive:           new(int32),
-		marshal:         m,
-		topics:          topics,
-		options:         NewConsumerOptions(),
-		partitions:      make(map[string]int),
-		rand:            rand.New(rand.NewSource(time.Now().UnixNano())),
-		claims:          make(map[string]map[int]*claim),
-		messages:        make(chan *Message, 1000),
-		claimedTopics:   make(map[string]bool),
-		topicClaimsChan: make(chan map[string]bool, 1),
+		alive:              new(int32),
+		marshal:            m,
+		topics:             topics,
+		options:            NewConsumerOptions(),
+		partitions:         make(map[string]int),
+		rand:               rand.New(rand.NewSource(time.Now().UnixNano())),
+		claims:             make(map[string]map[int]*claim),
+		messages:           make(chan *Message, 1000),
+		topicClaimsChan:    make(chan map[string]bool, 1),
+		topicClaimsUpdated: make(chan struct{}, 1),
 	}
 
 	for _, topic := range topics {
 		cn.partitions[topic] = m.Partitions(topic)
 	}
 	atomic.StoreInt32(cn.alive, 1)
+
+	go cn.sendTopicClaimsLoop()
+
 	return cn
 }
 
@@ -216,7 +219,9 @@ func (s *ConsumerSuite) TestTopicClaimBlocked(c *C) {
 
 	// Claim an entire topic, this creates a real consumer
 	cn := s.NewTestConsumer(s.m2, []string{topic})
+	cn.lock.Lock()
 	cn.options.ClaimEntireTopic = true
+	cn.lock.Unlock()
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
@@ -281,7 +286,9 @@ func (s *ConsumerSuite) TestTopicClaimPartial(c *C) {
 
 	// Claim an entire topic, this creates a real consumer
 	cn := s.NewTestConsumer(s.m2, []string{topic})
+	cn.lock.Lock()
 	cn.options.ClaimEntireTopic = true
+	cn.lock.Unlock()
 	defer cn.Terminate(true)
 
 	// Force our consumer to run it's topic claim loop so we know it has run
@@ -307,13 +314,24 @@ func (s *ConsumerSuite) TestTopicClaimPartial(c *C) {
 	c.Assert(s.m2.cluster.waitForRsteps(7), Equals, 7)
 	c.Assert(cnbl.getNumActiveClaims(), Equals, 0)
 	c.Assert(cn.getNumActiveClaims(), Equals, 2)
+
+	// Now we release claim 1 and make sure both get released (this is the healthy
+	// release case where we lose 1 partition and we want to make sure we release
+	// all partitions)
+	c.Assert(cn.claims[topic][1].Release(), Equals, true)
+	c.Assert(s.m.cluster.waitForRsteps(9), Equals, 9)
+	c.Assert(s.m.GetPartitionClaim(topic, 0).LastHeartbeat, Equals, int64(0))
+	c.Assert(s.m.GetPartitionClaim(topic, 1).LastHeartbeat, Equals, int64(0))
+
 }
 
 func (s *ConsumerSuite) TestMultiTopicClaim(c *C) {
 	// Claim partition 1 with one consumer
 	topics := []string{"test1", "test2", "test16"}
 	cn := s.NewTestConsumer(s.m, topics)
+	cn.lock.Lock()
 	cn.options.ClaimEntireTopic = true
+	cn.lock.Unlock()
 	defer cn.Terminate(true)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -370,8 +388,10 @@ func (s *ConsumerSuite) TestMultiTopicClaimWithLimit(c *C) {
 	// Claim partition 1 with one consumer
 	topics := []string{"test1", "test2", "test16"}
 	cn := s.NewTestConsumer(s.m, topics)
+	cn.lock.Lock()
 	cn.options.ClaimEntireTopic = true
 	cn.options.MaximumClaims = 2
+	cn.lock.Unlock()
 	defer cn.Terminate(true)
 
 	// Force our consumer to run it's topic claim loop so we know it has run
@@ -553,7 +573,9 @@ func (s *ConsumerSuite) TestCommitByToken(c *C) {
 
 func (s *ConsumerSuite) TestStrictOrdering(c *C) {
 	// Test that we can strict ordering semantics
+	s.cn.lock.Lock()
 	s.cn.options.StrictOrdering = true
+	s.cn.lock.Unlock()
 	s.Produce("test16", 0, "m1", "m2", "m3", "m4")
 	s.Produce("test16", 1, "m1", "m2", "m3", "m4")
 	c.Assert(s.cn.tryClaimPartition(s.cn.defaultTopic(), 0), Equals, true)
@@ -596,7 +618,9 @@ func (s *ConsumerSuite) TestTryClaimPartition(c *C) {
 
 func (s *ConsumerSuite) TestAggressiveClaim(c *C) {
 	// Ensure aggressive mode claims all partitions in a single call to claim
+	s.cn.lock.Lock()
 	s.cn.options.GreedyClaims = true
+	s.cn.lock.Unlock()
 	c.Assert(s.cn.GetCurrentLoad(), Equals, 0)
 	s.cn.claimPartitions()
 	c.Assert(s.cn.GetCurrentLoad(), Equals, 16)
@@ -692,7 +716,9 @@ func (s *ConsumerSuite) TestFastReclaim(c *C) {
 
 func (s *ConsumerSuite) TestMaximumClaims(c *C) {
 	// Test the MaximumClaims option.
+	s.cn.lock.Lock()
 	s.cn.options.MaximumClaims = 2
+	s.cn.lock.Unlock()
 	c.Assert(s.cn.isClaimLimitReached(), Equals, false)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 0)
 	s.cn.claimPartitions()
@@ -708,8 +734,10 @@ func (s *ConsumerSuite) TestMaximumClaims(c *C) {
 
 func (s *ConsumerSuite) TestMaximumGreedyClaims(c *C) {
 	// Test the MaximumClaims option combined with GreedyClaims.
+	s.cn.lock.Lock()
 	s.cn.options.MaximumClaims = 2
 	s.cn.options.GreedyClaims = true
+	s.cn.lock.Unlock()
 	c.Assert(s.cn.isClaimLimitReached(), Equals, false)
 	c.Assert(s.cn.getNumActiveClaims(), Equals, 0)
 	s.cn.claimPartitions()
