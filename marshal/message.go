@@ -126,6 +126,9 @@ func decode(inp []byte) (message, error) {
 		if len(parts) != msgLengthReleaseGroup {
 			return nil, fmt.Errorf("Invalid message (rg length): [%s]", string(inp))
 		}
+		if base.Topic != "" || base.PartID != 0 {
+			return nil, fmt.Errorf("Invalid ReleaseGroup message (Topic, PartID must be empty)")
+		}
 		expiry, err := strconv.Atoi(parts[idxRGMsgExpireTime])
 		if err != nil {
 			return nil, fmt.Errorf("Invalid message (rg message expire time): [%s]", string(inp))
@@ -257,6 +260,9 @@ type msgReleaseGroup struct {
 
 // Encode returns a string representation of the message.
 func (m *msgReleaseGroup) Encode() string {
+	if m.msgBase.Topic != "" || m.msgBase.PartID != 0 {
+		panic("ReleaseGroup message must have non-empty topic and partition id.")
+	}
 	return "ReleaseGroup/" + m.msgBase.Encode() + fmt.Sprintf("/%d", m.MsgExpireTime)
 }
 

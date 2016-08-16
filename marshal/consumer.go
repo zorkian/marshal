@@ -188,9 +188,16 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 						}
 					}
 
-					c.claims[topic][partID] = newClaim(
+					// Attempt to claim, this can fail
+					claim := newClaim(
 						topic, partID, c.marshal, c, c.messages, options)
-					c.sendTopicClaimsUpdate()
+					if claim == nil {
+						log.Warningf("[%s:%d] failed to fast-reclaim", topic, partID)
+					} else {
+						c.claims[topic][partID] = claim
+						go claim.healthCheckLoop()
+						c.sendTopicClaimsUpdate()
+					}
 				}
 			}
 
@@ -360,6 +367,24 @@ func (c *Consumer) rndIntn(n int) int {
 	defer c.lock.Unlock()
 
 	return c.rand.Intn(n)
+}
+
+// releaseClaims releases all claims this consumer has. This is called when a consumer is paused.
+func (c *Consumer) releaseClaims() {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	// Release all claims that this consumer keeps track of and remove them from the claims map.
+	for topic, partitions := range c.claims {
+		for partID, claim := range partitions {
+			if claim.Claimed() {
+				log.Warningf("[%s:%d] Consumer still paused, releasing claim",
+					topic, partID)
+				claim.Release()
+			}
+		}
+		c.claims[topic] = make(map[int]*claim)
+	}
 }
 
 // claimPartitions actually attempts to claim partitions. If the current consumer is
@@ -589,7 +614,7 @@ func (c *Consumer) sendTopicClaimsLoop() {
 	}
 }
 
-// updatePartitionCounts pulls the latest partition counts per topic from the Marshaler
+// updatePartitionCounts pulls the latest partition counts per topic from the Marshaler.
 func (c *Consumer) updatePartitionCounts() {
 	// Write lock as we're updating c.partitions below, potentially
 	c.lock.Lock()
@@ -609,14 +634,18 @@ func (c *Consumer) manageClaims() {
 	for !c.Terminated() {
 		c.updatePartitionCounts()
 
-		// Attempt to claim more partitions, this always runs and will keep running until all
-		// partitions in the topic are claimed (by somebody).
-		if c.options.ClaimEntireTopic {
-			c.claimTopics()
+		// If we learn that our consumer group is paused, release all claims.
+		if c.marshal.cluster.IsGroupPaused(c.marshal.GroupID()) {
+			c.releaseClaims()
 		} else {
-			c.claimPartitions()
+			// Attempt to claim more partitions, this always runs and will keep running until all
+			// partitions in the topic are claimed (by somebody).
+			if c.options.ClaimEntireTopic {
+				c.claimTopics()
+			} else {
+				c.claimPartitions()
+			}
 		}
-
 		// Now sleep a bit so we don't pound things
 		// TODO: Raise this later, we shouldn't attempt to claim this fast, this is just for
 		// development.

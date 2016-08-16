@@ -322,13 +322,22 @@ func (s *ClaimSuite) BenchmarkOrderedConsumeAndCommit(c *C) {
 	}
 }
 
+func (s *ClaimSuite) assertRelease(c *C) {
+	for i := 0; i < 100; i++ {
+		time.Sleep(30 * time.Millisecond)
+		if s.cl.Claimed() == false {
+			break
+		}
+	}
+	c.Assert(s.cl.Claimed(), Equals, false)
+}
+
 func (s *ClaimSuite) TestRelease(c *C) {
-	// Test that calling Release on a claim properly sets the flag and releases the
-	// partition
+	// Test that calling Release on a claim properly releases the partition
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
 	c.Assert(s.cl.Claimed(), Equals, true)
 	c.Assert(s.cl.Release(), Equals, true)
-	c.Assert(s.cl.Claimed(), Equals, false)
+	s.assertRelease(c)
 	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
 	c.Assert(s.cl.Release(), Equals, false)
@@ -580,7 +589,7 @@ func (s *ClaimSuite) TestHealthCheckRelease(c *C) {
 	c.Assert(s.cl.healthCheck(), Equals, false)
 	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
-	c.Assert(s.cl.Claimed(), Equals, false)
+	s.assertRelease(c)
 	c.Assert(s.cl.healthCheck(), Equals, false)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
 	c.Assert(s.m.GetPartitionClaim("test16", 0).CurrentOffset, Equals, int64(0))
