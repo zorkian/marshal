@@ -19,8 +19,8 @@ func (s *MessageSuite) TestMessageEncode(c *C) {
 	c.Assert(base.Encode(), Equals, "4/2/ii/cl/gr/t/3")
 
 	hb := msgHeartbeat{
-		msgBase:    base,
-		LastOffset: 5,
+		msgBase:       base,
+		CurrentOffset: 5,
 	}
 	c.Assert(hb.Encode(), Equals, "Heartbeat/4/2/ii/cl/gr/t/3/5")
 
@@ -30,14 +30,14 @@ func (s *MessageSuite) TestMessageEncode(c *C) {
 	c.Assert(cp.Encode(), Equals, "ClaimingPartition/4/2/ii/cl/gr/t/3")
 
 	rp := msgReleasingPartition{
-		msgBase:    base,
-		LastOffset: 7,
+		msgBase:       base,
+		CurrentOffset: 7,
 	}
 	c.Assert(rp.Encode(), Equals, "ReleasingPartition/4/2/ii/cl/gr/t/3/7")
 
 	cm := msgClaimingMessages{
-		msgBase:            base,
-		ProposedLastOffset: 9,
+		msgBase:               base,
+		ProposedCurrentOffset: 9,
 	}
 	c.Assert(cm.Encode(), Equals, "ClaimingMessages/4/2/ii/cl/gr/t/3/9")
 }
@@ -53,7 +53,7 @@ func (s *MessageSuite) TestMessageDecode(c *C) {
 
 	mhb, ok := msg.(*msgHeartbeat)
 	if !ok || msg.Type() != msgTypeHeartbeat || mhb.ClientID != "cl" || mhb.GroupID != "gr" ||
-		mhb.Topic != "t" || mhb.PartID != 1 || mhb.LastOffset != 2 || mhb.Time != 2 ||
+		mhb.Topic != "t" || mhb.PartID != 1 || mhb.CurrentOffset != 2 || mhb.Time != 2 ||
 		mhb.Version != 4 {
 		c.Error("Heartbeat message contents invalid")
 	}
@@ -76,7 +76,7 @@ func (s *MessageSuite) TestMessageDecode(c *C) {
 	mrp, ok := msg.(*msgReleasingPartition)
 	if !ok || msg.Type() != msgTypeReleasingPartition || mrp.ClientID != "cl" ||
 		mrp.GroupID != "gr" || mrp.Topic != "t" || mrp.PartID != 1 || mrp.Time != 2 ||
-		mrp.LastOffset != 9 || mhb.Version != 4 {
+		mrp.CurrentOffset != 9 || mhb.Version != 4 {
 		c.Error("ReleasingPartition message contents invalid")
 	}
 
@@ -86,7 +86,7 @@ func (s *MessageSuite) TestMessageDecode(c *C) {
 	}
 	mcm, ok := msg.(*msgClaimingMessages)
 	if !ok || msg.Type() != msgTypeClaimingMessages || mcm.ClientID != "cl" || mcm.GroupID != "gr" ||
-		mcm.Topic != "t" || mcm.PartID != 1 || mcm.ProposedLastOffset != 2 || mcm.Time != 2 ||
+		mcm.Topic != "t" || mcm.PartID != 1 || mcm.ProposedCurrentOffset != 2 || mcm.Time != 2 ||
 		mhb.Version != 4 {
 		c.Error("ClaimingMessages message contents invalid")
 	}

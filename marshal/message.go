@@ -33,18 +33,18 @@ const (
 
 	msgTypeHeartbeat   msgType = 0
 	msgLengthHeartbeat int     = msgLengthBase + 1
-	idxHBLastOffset    int     = idxBaseEnd + 1
+	idxHBCurrentOffset int     = idxBaseEnd + 1
 
 	msgTypeClaimingPartition   msgType = 1
 	msgLengthClaimingPartition int     = msgLengthBase
 
 	msgTypeReleasingPartition   msgType = 2
 	msgLengthReleasingPartition int     = msgLengthBase + 1
-	idxRPLastOffset             int     = idxBaseEnd + 1
+	idxRPCurrentOffset          int     = idxBaseEnd + 1
 
-	msgTypeClaimingMessages   msgType = 3
-	msgLengthClaimingMessages int     = msgLengthBase + 1
-	idxCMProposedLastOffset   int     = idxBaseEnd + 1
+	msgTypeClaimingMessages    msgType = 3
+	msgLengthClaimingMessages  int     = msgLengthBase + 1
+	idxCMProposedCurrentOffset int     = idxBaseEnd + 1
 )
 
 type message interface {
@@ -90,11 +90,11 @@ func decode(inp []byte) (message, error) {
 		if len(parts) != msgLengthHeartbeat {
 			return nil, fmt.Errorf("Invalid message (hb length): [%s]", string(inp))
 		}
-		offset, err := strconv.ParseInt(parts[idxHBLastOffset], 10, 0)
+		offset, err := strconv.ParseInt(parts[idxHBCurrentOffset], 10, 0)
 		if err != nil {
 			return nil, fmt.Errorf("Invalid message (hb offset): [%s]", string(inp))
 		}
-		return &msgHeartbeat{msgBase: base, LastOffset: int64(offset)}, nil
+		return &msgHeartbeat{msgBase: base, CurrentOffset: int64(offset)}, nil
 	case "ClaimingPartition":
 		if len(parts) != msgLengthClaimingPartition {
 			return nil, fmt.Errorf("Invalid message (cp length): [%s]", string(inp))
@@ -104,20 +104,20 @@ func decode(inp []byte) (message, error) {
 		if len(parts) != msgLengthReleasingPartition {
 			return nil, fmt.Errorf("Invalid message (rp length): [%s]", string(inp))
 		}
-		offset, err := strconv.ParseInt(parts[idxRPLastOffset], 10, 0)
+		offset, err := strconv.ParseInt(parts[idxRPCurrentOffset], 10, 0)
 		if err != nil {
 			return nil, fmt.Errorf("Invalid message (rp offset): [%s]", string(inp))
 		}
-		return &msgReleasingPartition{msgBase: base, LastOffset: offset}, nil
+		return &msgReleasingPartition{msgBase: base, CurrentOffset: offset}, nil
 	case "ClaimingMessages":
 		if len(parts) != msgLengthClaimingMessages {
 			return nil, fmt.Errorf("Invalid message (cm length): [%s]", string(inp))
 		}
-		offset, err := strconv.ParseInt(parts[idxCMProposedLastOffset], 10, 0)
+		offset, err := strconv.ParseInt(parts[idxCMProposedCurrentOffset], 10, 0)
 		if err != nil {
 			return nil, fmt.Errorf("Invalid message (cm offset): [%s]", string(inp))
 		}
-		return &msgClaimingMessages{msgBase: base, ProposedLastOffset: offset}, nil
+		return &msgClaimingMessages{msgBase: base, ProposedCurrentOffset: offset}, nil
 	}
 	return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
 }
@@ -152,12 +152,12 @@ func (m *msgBase) Timestamp() int {
 // they're consuming.
 type msgHeartbeat struct {
 	msgBase
-	LastOffset int64
+	CurrentOffset int64
 }
 
 // Encode returns a string representation of the message.
 func (m *msgHeartbeat) Encode() string {
-	return "Heartbeat/" + m.msgBase.Encode() + fmt.Sprintf("/%d", m.LastOffset)
+	return "Heartbeat/" + m.msgBase.Encode() + fmt.Sprintf("/%d", m.CurrentOffset)
 }
 
 // Type returns the type of this message.
@@ -194,12 +194,12 @@ func (m *msgClaimingPartition) Timestamp() int {
 // a partition.
 type msgReleasingPartition struct {
 	msgBase
-	LastOffset int64
+	CurrentOffset int64
 }
 
 // Encode returns a string representation of the message.
 func (m *msgReleasingPartition) Encode() string {
-	return "ReleasingPartition/" + m.msgBase.Encode() + fmt.Sprintf("/%d", m.LastOffset)
+	return "ReleasingPartition/" + m.msgBase.Encode() + fmt.Sprintf("/%d", m.CurrentOffset)
 }
 
 // Type returns the type of this message.
@@ -216,12 +216,12 @@ func (m *msgReleasingPartition) Timestamp() int {
 // advisory message.
 type msgClaimingMessages struct {
 	msgBase
-	ProposedLastOffset int64
+	ProposedCurrentOffset int64
 }
 
 // Encode returns a string representation of the message.
 func (m *msgClaimingMessages) Encode() string {
-	return "ClaimingMessages/" + m.msgBase.Encode() + fmt.Sprintf("/%d", m.ProposedLastOffset)
+	return "ClaimingMessages/" + m.msgBase.Encode() + fmt.Sprintf("/%d", m.ProposedCurrentOffset)
 }
 
 // Type returns the type of this message.

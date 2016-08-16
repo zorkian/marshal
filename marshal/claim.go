@@ -397,7 +397,7 @@ func (c *claim) heartbeat() bool {
 		go c.Release()
 	}
 
-	log.Infof("[%s:%d] heartbeat: Last read offset is %d, partition offset range is %d..%d.",
+	log.Infof("[%s:%d] heartbeat: Current offset is %d, partition offset range is %d..%d.",
 		c.topic, c.partID, c.offsets.Current, c.offsets.Earliest, c.offsets.Latest)
 	log.Infof("[%s:%d] heartbeat: There are %d messages in queue and %d messages outstanding.",
 		c.topic, c.partID, len(c.messages), c.outstandingMessages)

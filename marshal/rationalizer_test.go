@@ -73,7 +73,7 @@ func heartbeat(ts int, cl, gr, t string, id int, lo int64) *msgHeartbeat {
 			Topic:    t,
 			PartID:   id,
 		},
-		LastOffset: lo,
+		CurrentOffset: lo,
 	}
 }
 
@@ -98,7 +98,7 @@ func releasingPartition(ts int, cl, gr, t string, id int, lo int64) *msgReleasin
 			Topic:    t,
 			PartID:   id,
 		},
-		LastOffset: lo,
+		CurrentOffset: lo,
 	}
 }
 
@@ -224,7 +224,7 @@ func (s *RationalizerSuite) TestReleaseClaim(c *C) {
 	// They released at 30, should be free as of 31
 	s.m.cluster.ts = 31
 	c.Assert(s.m.IsClaimed("test1", 0), Equals, false)
-	c.Assert(s.m.GetLastPartitionClaim("test1", 0).LastOffset, Equals, int64(10))
+	c.Assert(s.m.GetLastPartitionClaim("test1", 0).CurrentOffset, Equals, int64(10))
 }
 
 func (s *RationalizerSuite) TestClaimHandoff(c *C) {
