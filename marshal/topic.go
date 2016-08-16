@@ -37,7 +37,7 @@ func (ts *topicState) PrintState() {
 		}
 		log.Infof("      * %2d [%s]: GPID %s | CLID %s | LHB %d (%d) | LOF %d | PCL %d",
 			partID, state, claim.GroupID, claim.ClientID, claim.LastHeartbeat,
-			now-claim.LastHeartbeat, claim.LastOffset, len(claim.pendingClaims))
+			now-claim.LastHeartbeat, claim.CurrentOffset, len(claim.pendingClaims))
 	}
 }
 
@@ -79,7 +79,7 @@ type PartitionOffsets struct {
 type PartitionClaim struct {
 	LastRelease   int64
 	LastHeartbeat int64
-	LastOffset    int64
+	CurrentOffset int64
 	ClientID      string
 	GroupID       string
 

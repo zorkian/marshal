@@ -118,8 +118,8 @@ func (s *MarshalSuite) TestPartitionLifecycleIntegration(c *C) {
 	if cl.LastHeartbeat <= 0 || cl.ClientID != "cl" || cl.GroupID != "gr" {
 		c.Errorf("PartitionClaim values unexpected %+v", cl)
 	}
-	if cl.LastOffset != 0 {
-		c.Error("LastOffset is not 0")
+	if cl.CurrentOffset != 0 {
+		c.Error("CurrentOffset is not 0")
 	}
 
 	// Now heartbeat on it to update the last offset
@@ -131,8 +131,8 @@ func (s *MarshalSuite) TestPartitionLifecycleIntegration(c *C) {
 	if cl.LastHeartbeat <= 0 || cl.ClientID != "cl" || cl.GroupID != "gr" {
 		c.Errorf("PartitionClaim values unexpected %+v", cl)
 	}
-	if cl.LastOffset != 10 {
-		c.Error("LastOffset is not 10")
+	if cl.CurrentOffset != 10 {
+		c.Error("CurrentOffset is not 10")
 	}
 
 	// Release
@@ -144,8 +144,8 @@ func (s *MarshalSuite) TestPartitionLifecycleIntegration(c *C) {
 	if cl.LastHeartbeat > 0 || cl.ClientID != "" || cl.GroupID != "" {
 		c.Errorf("PartitionClaim values unexpected %+v", cl)
 	}
-	if cl.LastOffset != 0 {
-		c.Error("LastOffset is not 20")
+	if cl.CurrentOffset != 0 {
+		c.Error("CurrentOffset is not 20")
 	}
 
 	// Get the last known claim data
@@ -153,8 +153,8 @@ func (s *MarshalSuite) TestPartitionLifecycleIntegration(c *C) {
 	if cl.LastHeartbeat > 0 || cl.ClientID != "cl" || cl.GroupID != "gr" {
 		c.Errorf("PartitionClaim values unexpected %+v", cl)
 	}
-	if cl.LastOffset != 20 {
-		c.Error("LastOffset is not 20")
+	if cl.CurrentOffset != 20 {
+		c.Error("CurrentOffset is not 20")
 	}
 }
 

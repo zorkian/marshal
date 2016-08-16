@@ -389,11 +389,11 @@ func (s *ClaimSuite) TestCurrentLag(c *C) {
 func (s *ClaimSuite) TestHeartbeat(c *C) {
 	// Ensure that our heartbeats are updating the marshal structures appropriately
 	// (makes sure clients are seeing the right values)
-	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(0))
+	c.Assert(s.m.GetPartitionClaim("test16", 0).CurrentOffset, Equals, int64(0))
 	s.cl.offsets.Current = 10
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
-	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(10))
+	c.Assert(s.m.GetPartitionClaim("test16", 0).CurrentOffset, Equals, int64(10))
 
 	// And test that releasing means we can't update heartbeat anymore
 	c.Assert(s.cl.Release(), Equals, true)
@@ -401,8 +401,8 @@ func (s *ClaimSuite) TestHeartbeat(c *C) {
 	s.cl.offsets.Current = 20
 	c.Assert(s.cl.heartbeat(), Equals, false)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
-	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(0))
-	c.Assert(s.m.GetLastPartitionClaim("test16", 0).LastOffset, Equals, int64(10))
+	c.Assert(s.m.GetPartitionClaim("test16", 0).CurrentOffset, Equals, int64(0))
+	c.Assert(s.m.GetLastPartitionClaim("test16", 0).CurrentOffset, Equals, int64(10))
 }
 
 func (s *ClaimSuite) TestVelocity(c *C) {
@@ -492,8 +492,8 @@ func (s *ClaimSuite) TestHealthCheck(c *C) {
 	c.Assert(s.cl.cyclesBehind, Equals, 3)
 	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
-	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(0))
-	c.Assert(s.m.GetLastPartitionClaim("test16", 0).LastOffset, Equals, int64(21))
+	c.Assert(s.m.GetPartitionClaim("test16", 0).CurrentOffset, Equals, int64(0))
+	c.Assert(s.m.GetLastPartitionClaim("test16", 0).CurrentOffset, Equals, int64(21))
 
 	// If we are okay with CV<PV we shouldn't release
 	opts := NewConsumerOptions()
@@ -518,6 +518,6 @@ func (s *ClaimSuite) TestHealthCheckRelease(c *C) {
 	c.Assert(s.cl.Claimed(), Equals, false)
 	c.Assert(s.cl.healthCheck(), Equals, false)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
-	c.Assert(s.m.GetPartitionClaim("test16", 0).LastOffset, Equals, int64(0))
-	c.Assert(s.m.GetLastPartitionClaim("test16", 0).LastOffset, Equals, int64(5))
+	c.Assert(s.m.GetPartitionClaim("test16", 0).CurrentOffset, Equals, int64(0))
+	c.Assert(s.m.GetLastPartitionClaim("test16", 0).CurrentOffset, Equals, int64(5))
 }

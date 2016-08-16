@@ -168,7 +168,7 @@ func (c *KafkaCluster) updateClaim(msg *msgHeartbeat) {
 	// message), so we can only assume it's valid.
 	topic.partitions[msg.PartID].ClientID = msg.ClientID
 	topic.partitions[msg.PartID].GroupID = msg.GroupID
-	topic.partitions[msg.PartID].LastOffset = msg.LastOffset
+	topic.partitions[msg.PartID].CurrentOffset = msg.CurrentOffset
 	topic.partitions[msg.PartID].LastHeartbeat = int64(msg.Time)
 	topic.partitions[msg.PartID].LastRelease = 0
 }
@@ -190,7 +190,7 @@ func (c *KafkaCluster) releaseClaim(msg *msgReleasingPartition) {
 
 	// Record the offset they told us they last processed, and then set the heartbeat to 0
 	// which means this is no longer claimed
-	topic.partitions[msg.PartID].LastOffset = msg.LastOffset
+	topic.partitions[msg.PartID].CurrentOffset = msg.CurrentOffset
 	topic.partitions[msg.PartID].LastHeartbeat = 0
 	topic.partitions[msg.PartID].LastRelease = int64(msg.Time)
 }
@@ -222,7 +222,7 @@ func (c *KafkaCluster) handleClaim(msg *msgClaimingPartition) {
 	// us think it's claimed (it is).
 	topic.partitions[msg.PartID].ClientID = msg.ClientID
 	topic.partitions[msg.PartID].GroupID = msg.GroupID
-	topic.partitions[msg.PartID].LastOffset = 0 // not present in this message, reset.
+	topic.partitions[msg.PartID].CurrentOffset = 0 // not present in this message, reset.
 	topic.partitions[msg.PartID].LastHeartbeat = int64(msg.Time)
 	topic.partitions[msg.PartID].LastRelease = 0
 }
