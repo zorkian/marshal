@@ -54,7 +54,10 @@ The protocol is defined with several simple messages:
    **partition**, **last_offset** and is used when a consumer wants to proactively release
    a partition.
 1. `ClaimingMessages` which includes **client_id**, **group_id**, **topic**,
-   **partition**, proposed_last_offset is used for the At Most Once consumption flow.
+   **partition**, **proposed_last_offset** is used for the At Most Once consumption flow.
+1. `ReleaseGroup` which includes **client_id**, **group_id**, **msg_expire_time**. This message
+   is sent by a special Admin actor, which can pause an entire consumer group identified
+   by the **group_id**, until **msg_expire_time**.
 
 ## Determining World State
 

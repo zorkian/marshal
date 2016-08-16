@@ -40,6 +40,13 @@ func (s *MessageSuite) TestMessageEncode(c *C) {
 		ProposedCurrentOffset: 9,
 	}
 	c.Assert(cm.Encode(), Equals, "ClaimingMessages/4/2/ii/cl/gr/t/3/9")
+
+	rg := msgReleaseGroup{
+		// Base message GroupID identifies which consumer group to release.
+		msgBase:       base,
+		MsgExpireTime: 12,
+	}
+	c.Assert(rg.Encode(), Equals, "ReleaseGroup/4/2/ii/cl/gr/t/3/12")
 }
 
 func (s *MessageSuite) TestMessageDecode(c *C) {
@@ -65,7 +72,7 @@ func (s *MessageSuite) TestMessageDecode(c *C) {
 	mcp, ok := msg.(*msgClaimingPartition)
 	if !ok || msg.Type() != msgTypeClaimingPartition || mcp.ClientID != "cl" ||
 		mcp.GroupID != "gr" || mcp.Topic != "t" || mcp.PartID != 1 || mcp.Time != 2 ||
-		mhb.Version != 4 {
+		mcp.Version != 4 {
 		c.Error("ClaimingPartition message contents invalid")
 	}
 
@@ -89,5 +96,16 @@ func (s *MessageSuite) TestMessageDecode(c *C) {
 		mcm.Topic != "t" || mcm.PartID != 1 || mcm.ProposedCurrentOffset != 2 || mcm.Time != 2 ||
 		mhb.Version != 4 {
 		c.Error("ClaimingMessages message contents invalid")
+	}
+
+	msg, err = decode([]byte("ReleaseGroup/4/2/ii/cl/gr/t/1/12"))
+	if msg == nil || err != nil {
+		c.Error("Expected msg, got error", err)
+	}
+	mrg, ok := msg.(*msgReleaseGroup)
+	if !ok || msg.Type() != msgTypeReleaseGroup || mrg.ClientID != "cl" || mrg.GroupID != "gr" ||
+		mrg.Topic != "t" || mrg.PartID != 1 || mrg.MsgExpireTime != 12 || mrg.Time != 2 ||
+		mrg.Version != 4 {
+		c.Error("ReleaseGroup message contents invalid")
 	}
 }
