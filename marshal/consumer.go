@@ -538,7 +538,7 @@ func (c *Consumer) sendTopicClaimsUpdate() {
 func (c *Consumer) sendTopicClaimsLoop() {
 	defer close(c.topicClaimsChan)
 
-	lastClaims, _ := c.GetCurrentTopicClaims()
+	lastClaims := make(map[string]bool)
 	for range c.topicClaimsUpdated {
 		// Get consistent claims and send them
 		claims, err := c.GetCurrentTopicClaims()
