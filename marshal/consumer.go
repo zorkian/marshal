@@ -337,8 +337,10 @@ func (c *Consumer) tryClaimPartition(topic string, partID int) bool {
 				log.Errorf("Internal double-claim for %s:%d.", topic, partID)
 				log.Errorf("This is a catastrophic error. We're terminating Marshal.")
 				log.Errorf("No further messages will be available. Please restart.")
-				c.marshal.PrintState()
-				go c.marshal.Terminate()
+				go func() {
+					c.marshal.PrintState()
+					c.marshal.Terminate()
+				}()
 			}
 		}
 	}
