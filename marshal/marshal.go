@@ -89,6 +89,7 @@ func (m *Marshaler) addNewConsumer(c *Consumer) {
 func (m *Marshaler) removeConsumer(c *Consumer) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+
 	for i, cn := range m.consumers {
 		if cn == c {
 			m.consumers = append(m.consumers[:i], m.consumers[i+1:]...)

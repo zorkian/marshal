@@ -137,6 +137,16 @@ func (s *ClaimSuite) TestCommit(c *C) {
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 0)
 }
 
+func (s *ClaimSuite) waitForTrackingOffsets(c *C, ct int) {
+	for i := 0; i < 100; i++ {
+		if s.cl.numTrackingOffsets() != ct {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+	}
+	c.Assert(s.cl.numTrackingOffsets(), Equals, ct)
+}
+
 func (s *ClaimSuite) TestFlush(c *C) {
 	// Test the commit message flow, ensuring that our offset only gets updated when
 	// we have properly committed messages
@@ -148,21 +158,27 @@ func (s *ClaimSuite) TestFlush(c *C) {
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 	c.Assert(s.cl.offsets.Earliest, Equals, int64(0))
 	c.Assert(s.cl.offsets.Latest, Equals, int64(6))
+	s.waitForTrackingOffsets(c, 6)
 
 	// Consume 1, Flush... offsets still 0
 	msg1 := s.consumeOne(c)
 	c.Assert(msg1.Value, DeepEquals, []byte("m1"))
+	c.Assert(msg1.Offset, Equals, int64(0))
 	c.Assert(s.cl.Flush(), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
 	s.cl.lock.RLock()
-	c.Assert(s.cl.tracking[0], Equals, false)
+	val, ok := s.cl.tracking[0]
+	c.Assert(ok, Equals, true)
+	c.Assert(val, Equals, false)
 	s.cl.lock.RUnlock()
 
 	// Consume 2, still 0
 	msg2 := s.consumeOne(c)
 	c.Assert(msg2.Value, DeepEquals, []byte("m2"))
+	c.Assert(msg2.Offset, Equals, int64(1))
 	c.Assert(s.cl.Flush(), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(0))
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 6)
 
 	// Commit 1, offset 1 but only after Flush phase
 	c.Assert(s.cl.Commit(msg1.Offset), IsNil)
@@ -173,10 +189,12 @@ func (s *ClaimSuite) TestFlush(c *C) {
 
 	// Produce some more
 	c.Assert(s.Produce("test16", 0, "m7"), Equals, int64(6))
+	s.waitForTrackingOffsets(c, 6)
 
 	// Consume 3, Flush, offset 1
 	msg3 := s.consumeOne(c)
 	c.Assert(msg3.Value, DeepEquals, []byte("m3"))
+	c.Assert(msg3.Offset, Equals, int64(2))
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.Flush(), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
@@ -185,25 +203,27 @@ func (s *ClaimSuite) TestFlush(c *C) {
 	// flow doesn't (unlike heartbeat which does)
 	c.Assert(s.cl.offsets.Latest, Equals, int64(6))
 
-	// Commit #3, offset will stay 1!
+	// Commit #3, offset will stay 1! we're still tracking 6 because the
+	// committed one in middle position must stay tracked until the
+	// previous messages are committed
 	c.Assert(s.cl.Commit(msg3.Offset), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.Flush(), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
-	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 6)
 
 	// Now a heartbeat happens, it should change nothing except Latest
 	c.Assert(s.cl.heartbeat(), Equals, true)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
-	c.Assert(s.cl.numTrackingOffsets(), Equals, 5)
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 6)
 	c.Assert(s.cl.offsets.Latest, Equals, int64(7))
 
-	// Commit #2, offset now advances to 3
+	// Commit #2, offset now advances to 3 and the outstanding is 4
 	c.Assert(s.cl.Commit(msg2.Offset), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(1))
 	c.Assert(s.cl.Flush(), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(3))
-	c.Assert(s.cl.numTrackingOffsets(), Equals, 3)
+	c.Assert(s.cl.numTrackingOffsets(), Equals, 4)
 
 	// Attempt to commit invalid offset (never seen), make sure it errors
 	msg3.Offset = 95
@@ -213,15 +233,16 @@ func (s *ClaimSuite) TestFlush(c *C) {
 	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
 	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
 	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
+	c.Assert(s.cl.Commit(s.consumeOne(c).Offset), IsNil)
 	c.Assert(s.cl.offsets.Current, Equals, int64(3))
 	c.Assert(s.cl.Flush(), IsNil)
-	c.Assert(s.cl.offsets.Current, Equals, int64(6))
+	c.Assert(s.cl.offsets.Current, Equals, int64(7))
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 0)
 
 	// One last heartbeat, should be no change from the above Flush since
 	// nothing has happened
 	c.Assert(s.cl.heartbeat(), Equals, true)
-	c.Assert(s.cl.offsets.Current, Equals, int64(6))
+	c.Assert(s.cl.offsets.Current, Equals, int64(7))
 	c.Assert(s.cl.numTrackingOffsets(), Equals, 0)
 	c.Assert(s.cl.offsets.Latest, Equals, int64(7))
 }
