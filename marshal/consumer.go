@@ -639,8 +639,9 @@ func (c *Consumer) terminateAndCleanup(release bool, remove bool) bool {
 
 	latestTopicClaims := make(map[string]bool)
 	releasedTopics := make(map[string]bool)
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
 
 	for topic, topicClaims := range c.claims {
 		for partID, claim := range topicClaims {
