@@ -1,6 +1,7 @@
 package marshal
 
 import (
+	"sync"
 	"time"
 
 	. "gopkg.in/check.v1"
@@ -338,6 +339,49 @@ func (s *ClaimSuite) TestTerminate(c *C) {
 	// for the partition
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
 	c.Assert(s.cl.Claimed(), Equals, true)
+	c.Assert(s.cl.Terminate(), Equals, true)
+	c.Assert(s.cl.Claimed(), Equals, true)
+}
+
+func (s *ClaimSuite) TestTerminateDoesNotDeadlock(c *C) {
+	// Test that termination is not blocked by a full messages channel
+	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
+	c.Assert(s.cl.Claimed(), Equals, true)
+
+	// Replace message chan with length 1 chan for testing
+	s.cl.lock.Lock()
+	s.cl.messages = make(chan *Message, 1)
+	s.cl.lock.Unlock()
+
+	// Now produce 2 messages and wait for them to be consumed
+	c.Assert(s.Produce("test16", 0, "m1", "m2"), Equals, int64(1))
+	s.waitForTrackingOffsets(c, 2)
+
+	// Assert message channel has 1 message in it, we have 2 tracking but 1 message
+	// in channel because second is blocked
+	c.Assert(len(s.cl.messages), Equals, 1)
+
+	// Assert that messageLock is being held, this works by sending a goroutine to
+	// get the lock and then in our current function we sleep a bit. If the sleep expires,
+	// that means the goroutine was blocked (or never scheduled). We get around that by
+	// using the WaitGroup to make sure it actually scheduled.
+	wasScheduled := &sync.WaitGroup{}
+	wasScheduled.Add(1)
+	probablyHeld := make(chan bool, 2)
+	go func() {
+		wasScheduled.Done() // Got scheduled!
+		s.cl.messagesLock.Lock()
+		defer s.cl.messagesLock.Unlock()
+		probablyHeld <- false
+	}()
+	wasScheduled.Wait()
+	select {
+	case <-time.After(100 * time.Millisecond):
+		probablyHeld <- true
+	}
+	c.Assert(<-probablyHeld, Equals, true)
+
+	// Now terminate, this should return and work and not be claimed
 	c.Assert(s.cl.Terminate(), Equals, true)
 	c.Assert(s.cl.Claimed(), Equals, true)
 }

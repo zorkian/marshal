@@ -38,6 +38,7 @@ type claim struct {
 
 	// lock protects all access to the member variables of this struct except for the
 	// messages channel, which can be read from or written to without holding the lock.
+	// Additionally the stopChan can be used.
 	lock          *sync.RWMutex
 	messagesLock  *sync.Mutex
 	offsets       PartitionOffsets
@@ -51,6 +52,7 @@ type claim struct {
 	options       ConsumerOptions
 	kafkaConsumer kafka.Consumer
 	messages      chan *Message
+	stopChan      chan struct{}
 
 	// tracking is a dict that maintains information about offsets that have been
 	// sent to and acknowledged by clients. An offset is inserted into this map when
@@ -104,6 +106,7 @@ func newClaim(topic string, partID int, marshal *Marshaler, consumer *Consumer,
 	obj := &claim{
 		lock:         &sync.RWMutex{},
 		messagesLock: &sync.Mutex{},
+		stopChan:     make(chan struct{}),
 		marshal:      marshal,
 		consumer:     consumer,
 		topic:        topic,
@@ -278,6 +281,9 @@ func (c *claim) teardown(releasePartition bool) bool {
 		return false
 	}
 
+	// Kill the stopchan now which is a useful way of knowing we're quitting within selects
+	close(c.stopChan)
+
 	// need to serialize access to the messages channel. We should not release if the message pump
 	// is about to write to the consumer channel
 	c.messagesLock.Lock()
@@ -360,14 +366,22 @@ func (c *claim) messagePump() {
 		// needs to be serialized with Release, otherwise a race-condition can potentially
 		// lead to a write to a closed-channel. That's why we're using this lock. We're not
 		// using the main lock to avoid deadlocks since the write to the channel is blocking
-		// until someone consumes the message blocking all Commit operations
+		// until someone consumes the message blocking all Commit operations.
+		//
+		// This must not block -- if we hold the messagesLock for too long we will cause
+		// possible deadlocks.
 		c.messagesLock.Lock()
 		if !c.Terminated() {
 			// This allocates a new Message to put the proto.Message in.
 			// TODO: This is really annoying and probably stupidly inefficient, is there any
 			// way to do this better?
 			tmp := Message(*msg)
-			c.messages <- &tmp
+			select {
+			case c.messages <- &tmp:
+				// Message successfully delivered to queue
+			case <-c.stopChan:
+				// Claim is terminated, the message will go nowhere
+			}
 		}
 		c.messagesLock.Unlock()
 	}
