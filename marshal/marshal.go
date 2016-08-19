@@ -247,6 +247,7 @@ func (m *Marshaler) GetPartitionOffsets(topicName string, partID int) (Partition
 // msgBase constructs a base message object for a message.
 func (m *Marshaler) msgBase(topicName string, partID int) *msgBase {
 	return &msgBase{
+		Version:    1,
 		Time:       int(time.Now().Unix()),
 		InstanceID: m.instanceID,
 		ClientID:   m.clientID,

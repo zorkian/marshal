@@ -45,6 +45,10 @@ const (
 	msgTypeClaimingMessages    msgType = 3
 	msgLengthClaimingMessages  int     = msgLengthBase + 1
 	idxCMProposedCurrentOffset int     = idxBaseEnd + 1
+
+	msgTypeReleaseGroup   msgType = 4
+	msgLengthReleaseGroup int     = msgLengthBase + 1
+	idxRGMsgExpireTime    int     = idxBaseEnd + 1
 )
 
 type message interface {
@@ -118,6 +122,16 @@ func decode(inp []byte) (message, error) {
 			return nil, fmt.Errorf("Invalid message (cm offset): [%s]", string(inp))
 		}
 		return &msgClaimingMessages{msgBase: base, ProposedCurrentOffset: offset}, nil
+	case "ReleaseGroup":
+		if len(parts) != msgLengthReleaseGroup {
+			return nil, fmt.Errorf("Invalid message (rg length): [%s]", string(inp))
+		}
+		expiry, err := strconv.Atoi(parts[idxRGMsgExpireTime])
+		if err != nil {
+			return nil, fmt.Errorf("Invalid message (rg message expire time): [%s]", string(inp))
+		}
+
+		return &msgReleaseGroup{msgBase: base, MsgExpireTime: expiry}, nil
 	}
 	return nil, fmt.Errorf("Invalid message: [%s]", string(inp))
 }
@@ -231,5 +245,27 @@ func (m *msgClaimingMessages) Type() msgType {
 
 // Timestamp returns the timestamp of the message
 func (m *msgClaimingMessages) Timestamp() int {
+	return m.Time
+}
+
+// msgReleaseGroup is used by the Admin to pause a consumer group,
+// identified by groupID, until MsgExpireTime.
+type msgReleaseGroup struct {
+	msgBase
+	MsgExpireTime int
+}
+
+// Encode returns a string representation of the message.
+func (m *msgReleaseGroup) Encode() string {
+	return "ReleaseGroup/" + m.msgBase.Encode() + fmt.Sprintf("/%d", m.MsgExpireTime)
+}
+
+// Type returns the type of this message.
+func (m *msgReleaseGroup) Type() msgType {
+	return msgTypeReleaseGroup
+}
+
+// Timestamp returns the timestamp of the message
+func (m *msgReleaseGroup) Timestamp() int {
 	return m.Time
 }
