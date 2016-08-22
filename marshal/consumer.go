@@ -188,10 +188,16 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 						}
 					}
 
-					c.claims[topic][partID] = newClaim(
+					// Attempt to claim, this can fail
+					claim := newClaim(
 						topic, partID, c.marshal, c, c.messages, options)
-					go c.claims[topic][partID].healthCheckLoop()
-					c.sendTopicClaimsUpdate()
+					if claim == nil {
+						log.Warningf("[%s:%d] failed to fast-reclaim", topic, partID)
+					} else {
+						c.claims[topic][partID] = claim
+						go claim.healthCheckLoop()
+						c.sendTopicClaimsUpdate()
+					}
 				}
 			}
 
