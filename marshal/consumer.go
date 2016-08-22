@@ -190,6 +190,7 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 
 					c.claims[topic][partID] = newClaim(
 						topic, partID, c.marshal, c, c.messages, options)
+					go c.claims[topic][partID].healthCheckLoop()
 					c.sendTopicClaimsUpdate()
 				}
 			}
