@@ -45,7 +45,6 @@ type claim struct {
 	marshal       *Marshaler
 	consumer      *Consumer
 	rand          *rand.Rand
-	claimed       *int32
 	terminated    *int32
 	beatCounter   int32
 	lastHeartbeat int64
@@ -111,7 +110,6 @@ func newClaim(topic string, partID int, marshal *Marshaler, consumer *Consumer,
 		consumer:     consumer,
 		topic:        topic,
 		partID:       partID,
-		claimed:      new(int32),
 		terminated:   new(int32),
 		offsets:      offsets,
 		messages:     messages,
@@ -119,7 +117,6 @@ func newClaim(topic string, partID int, marshal *Marshaler, consumer *Consumer,
 		tracking:     make(map[int64]bool),
 		rand:         rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-	atomic.StoreInt32(obj.claimed, 1)
 	obj.outstandingMessageWait = sync.NewCond(obj.lock)
 
 	// Now try to actually claim it, this can block a while
@@ -152,7 +149,7 @@ func (c *claim) setup() {
 	err := c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current)
 	if err != nil {
 		log.Errorf("[%s:%d] consumer failed to heartbeat: %s", c.topic, c.partID, err)
-		atomic.StoreInt32(c.claimed, 0)
+		go c.Release()
 		return
 	}
 	c.lastHeartbeat = time.Now().Unix()
@@ -167,9 +164,7 @@ func (c *claim) setup() {
 	if err != nil {
 		log.Errorf("[%s:%d] consumer failed to create Kafka Consumer: %s",
 			c.topic, c.partID, err)
-		// TODO: There is an optimization here where we could release the partition.
-		// As it stands, we're not doing anything,
-		atomic.StoreInt32(c.claimed, 0)
+		go c.Release()
 		return
 	}
 	c.kafkaConsumer = kafkaConsumer
@@ -186,7 +181,7 @@ func (c *claim) setup() {
 // processing a message. This updates our tracking structure so the heartbeat knows how
 // far ahead it can move our offset.
 func (c *claim) Commit(offset int64) error {
-	if atomic.LoadInt32(c.claimed) != 1 {
+	if c.Terminated() || !c.Claimed() {
 		return fmt.Errorf("[%s:%d] is no longer claimed; can't commit offset %d",
 			c.topic, c.partID, offset)
 	}
@@ -213,9 +208,11 @@ func (c *claim) Commit(offset int64) error {
 }
 
 // Claimed returns whether or not this claim structure is alive and well and believes
-// that it is still an active claim.
+// that it is still an active claim. This is based on Marshal's state of the world.
 func (c *claim) Claimed() bool {
-	return atomic.LoadInt32(c.claimed) == 1
+	claim := c.marshal.GetPartitionClaim(c.topic, c.partID)
+	return claim.ClientID == c.marshal.ClientID() &&
+		claim.GroupID == c.marshal.GroupID()
 }
 
 // Terminated returns whether the consumer has terminated the Claim. The claim may or may NOT
@@ -240,7 +237,7 @@ func (c *claim) GetCurrentLag() int64 {
 func (c *claim) Flush() error {
 	// By definition a terminated claim has already flushed anything it can flush
 	// or we've lost the lock so there's nothing we can do. It's not an error.
-	if c.Terminated() {
+	if c.Terminated() || !c.Claimed() {
 		return nil
 	}
 
@@ -306,7 +303,6 @@ func (c *claim) teardown(releasePartition bool) bool {
 	var err error
 	if releasePartition {
 		log.Infof("[%s:%d] releasing partition claim", c.topic, c.partID)
-		atomic.StoreInt32(c.claimed, 0)
 		err = c.marshal.ReleasePartition(c.topic, c.partID, c.offsets.Current)
 	} else {
 		err = c.marshal.CommitOffsets(c.topic, c.partID, c.offsets.Current)
@@ -325,7 +321,7 @@ func (c *claim) messagePump() {
 	// This method MUST NOT make changes to the claim structure. Since we might
 	// be running while someone else has the lock, and we can't get it ourselves, we are
 	// forbidden to touch anything other than the consumer and the message channel.
-	for c.Claimed() {
+	for c.Claimed() && !c.Terminated() {
 		msg, err := c.kafkaConsumer.Consume()
 		if err == proto.ErrOffsetOutOfRange {
 			// Fell out of range, presumably because we're handling this too slow, so
@@ -393,7 +389,7 @@ func (c *claim) messagePump() {
 // partition.
 func (c *claim) heartbeat() bool {
 	// Unclaimed partitions don't heartbeat.
-	if atomic.LoadInt32(c.claimed) != 1 {
+	if c.Terminated() || !c.Claimed() {
 		return false
 	}
 
@@ -462,7 +458,7 @@ func (c *claim) updateCurrentOffsets() bool {
 // partition is healthy, else false.
 func (c *claim) healthCheck() bool {
 	// Unclaimed partitions aren't healthy.
-	if atomic.LoadInt32(c.claimed) != 1 {
+	if c.Terminated() || !c.Claimed() {
 		return false
 	}
 
@@ -531,7 +527,7 @@ func (c *claim) healthCheck() bool {
 // a claimed partition
 func (c *claim) healthCheckLoop() {
 	time.Sleep(<-c.marshal.cluster.jitters)
-	for c.Claimed() {
+	for c.Claimed() && !c.Terminated() {
 		if c.healthCheck() {
 			go c.heartbeat()
 		}
