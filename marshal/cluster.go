@@ -41,6 +41,8 @@ type KafkaCluster struct {
 	marshalers []*Marshaler
 	topics     map[string]int
 	groups     map[string]map[string]*topicState
+	// pausedGroups stores the expiry time for groups that are paused.
+	pausedGroups map[string]time.Time
 
 	// This WaitGroup is used for signalling when all of the rationalizers have
 	// finished processing.
@@ -97,15 +99,16 @@ func Dial(name string, brokers []string, options MarshalOptions) (*KafkaCluster,
 	}
 
 	c := &KafkaCluster{
-		quit:     new(int32),
-		rsteps:   new(int32),
-		name:     name,
-		options:  options,
-		broker:   broker,
-		producer: broker.Producer(kafka.NewProducerConf()),
-		topics:   make(map[string]int),
-		groups:   make(map[string]map[string]*topicState),
-		jitters:  make(chan time.Duration, 100),
+		quit:         new(int32),
+		rsteps:       new(int32),
+		name:         name,
+		options:      options,
+		broker:       broker,
+		producer:     broker.Producer(kafka.NewProducerConf()),
+		topics:       make(map[string]int),
+		groups:       make(map[string]map[string]*topicState),
+		pausedGroups: make(map[string]time.Time),
+		jitters:      make(chan time.Duration, 100),
 	}
 
 	// Do an initial metadata fetch, this will block a bit
@@ -315,6 +318,27 @@ func (c *KafkaCluster) waitForRsteps(steps int) int {
 			return int(cval)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// pauseConsumerGroup stores an expiry time for consumer groups that we'd like to pause.
+func (c *KafkaCluster) pauseConsumerGroup(groupID string, adminID string, expiry time.Time) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	log.Warningf("Cluster marking group %s paused with expiry: %s", groupID, expiry.Format(time.UnixDate))
+	c.pausedGroups[groupID] = expiry
+}
+
+// IsGroupPaused returns true if the given consumer group is paused.
+// TODO(pihu) This just checks the expiry time, and not the admin ID.
+func (c *KafkaCluster) IsGroupPaused(groupID string) bool {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	if res, ok := c.pausedGroups[groupID]; !ok {
+		return false
+	} else {
+		return time.Now().Before(res)
 	}
 }
 

@@ -24,7 +24,7 @@ type ConsumerSuite struct {
 	cn *Consumer
 }
 
-func (s *ConsumerSuite) NewTestConsumer(m *Marshaler, topics []string) *Consumer {
+func NewTestConsumer(m *Marshaler, topics []string) *Consumer {
 	cn := &Consumer{
 		alive:              new(int32),
 		marshal:            m,
@@ -58,7 +58,7 @@ func (s *ConsumerSuite) SetUpTest(c *C) {
 	s.m2, err = NewMarshaler("cl2", "gr", []string{s.s.Addr()})
 	c.Assert(err, IsNil)
 
-	s.cn = s.NewTestConsumer(s.m, []string{"test16"})
+	s.cn = NewTestConsumer(s.m, []string{"test16"})
 }
 
 func (s *ConsumerSuite) TearDownTest(c *C) {
@@ -212,13 +212,13 @@ func (s *ConsumerSuite) TestTopicClaim(c *C) {
 func (s *ConsumerSuite) TestTopicClaimBlocked(c *C) {
 	topic := "test2"
 	// Claim partition 0 with one consumer
-	cnbl := s.NewTestConsumer(s.m, []string{topic})
+	cnbl := NewTestConsumer(s.m, []string{topic})
 	c.Assert(cnbl.tryClaimPartition(topic, 0), Equals, true)
 	c.Assert(s.m.cluster.waitForRsteps(2), Equals, 2)
 	c.Assert(s.m2.cluster.waitForRsteps(2), Equals, 2)
 
 	// Claim an entire topic, this creates a real consumer
-	cn := s.NewTestConsumer(s.m2, []string{topic})
+	cn := NewTestConsumer(s.m2, []string{topic})
 	cn.lock.Lock()
 	cn.options.ClaimEntireTopic = true
 	cn.lock.Unlock()
@@ -279,13 +279,13 @@ func (s *ConsumerSuite) TestTopicClaimBlocked(c *C) {
 func (s *ConsumerSuite) TestTopicClaimPartial(c *C) {
 	topic := "test2"
 	// Claim partition 1 with one consumer
-	cnbl := s.NewTestConsumer(s.m, []string{topic})
+	cnbl := NewTestConsumer(s.m, []string{topic})
 	c.Assert(cnbl.tryClaimPartition(topic, 1), Equals, true)
 	c.Assert(s.m.cluster.waitForRsteps(2), Equals, 2)
 	c.Assert(s.m2.cluster.waitForRsteps(2), Equals, 2)
 
 	// Claim an entire topic, this creates a real consumer
-	cn := s.NewTestConsumer(s.m2, []string{topic})
+	cn := NewTestConsumer(s.m2, []string{topic})
 	cn.lock.Lock()
 	cn.options.ClaimEntireTopic = true
 	cn.lock.Unlock()
@@ -328,7 +328,7 @@ func (s *ConsumerSuite) TestTopicClaimPartial(c *C) {
 func (s *ConsumerSuite) TestMultiTopicClaim(c *C) {
 	// Claim partition 1 with one consumer
 	topics := []string{"test1", "test2", "test16"}
-	cn := s.NewTestConsumer(s.m, topics)
+	cn := NewTestConsumer(s.m, topics)
 	cn.lock.Lock()
 	cn.options.ClaimEntireTopic = true
 	cn.lock.Unlock()
@@ -387,7 +387,7 @@ func (s *ConsumerSuite) TestMultiTopicClaim(c *C) {
 func (s *ConsumerSuite) TestMultiTopicClaimWithLimit(c *C) {
 	// Claim partition 1 with one consumer
 	topics := []string{"test1", "test2", "test16"}
-	cn := s.NewTestConsumer(s.m, topics)
+	cn := NewTestConsumer(s.m, topics)
 	cn.lock.Lock()
 	cn.options.ClaimEntireTopic = true
 	cn.options.MaximumClaims = 2
@@ -634,7 +634,7 @@ func (s *ConsumerSuite) TestBalancedClaim(c *C) {
 }
 
 func (s *ConsumerSuite) TestUnhealthyReclaim(c *C) {
-	cn := s.NewTestConsumer(s.m, []string{"test1"})
+	cn := NewTestConsumer(s.m, []string{"test1"})
 	defer cn.Terminate(true)
 
 	// Claim a partition
@@ -751,7 +751,7 @@ func (s *ConsumerSuite) TestMaximumGreedyClaims(c *C) {
 func (s *ConsumerSuite) TestUpdatePartitionCounts(c *C) {
 	// Create a new consumer on test1
 	topic := "test1"
-	cn := s.NewTestConsumer(s.m, []string{topic})
+	cn := NewTestConsumer(s.m, []string{topic})
 	defer cn.Terminate(true)
 	s.cn = cn
 

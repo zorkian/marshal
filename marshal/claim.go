@@ -173,8 +173,8 @@ func (c *claim) setup() {
 	go c.messagePump()
 
 	// Totally done, let the world know and move on
-	log.Infof("[%s:%d] consumer claimed at offset %d (is %d behind)",
-		c.topic, c.partID, c.offsets.Current, c.offsets.Latest-c.offsets.Current)
+	log.Infof("[%s:%d] consumer %s claimed at offset %d (is %d behind)",
+		c.topic, c.partID, c.marshal.clientID, c.offsets.Current, c.offsets.Latest-c.offsets.Current)
 }
 
 // Commit is called by a Consumer class when the client has indicated that it has finished
@@ -267,7 +267,6 @@ func (c *claim) Release() bool {
 }
 
 // Terminate will invoke commit offsets, terminate the claim, but does NOT release the partition.
-// After calling Release, consumer cannot consume messages anymore
 func (c *claim) Terminate() bool {
 	return c.teardown(false)
 }
@@ -475,6 +474,14 @@ func (c *claim) healthCheck() bool {
 	if c.lastHeartbeat < time.Now().Unix()-HeartbeatInterval {
 		log.Warningf("[%s:%d] consumer unhealthy by heartbeat test, releasing",
 			c.topic, c.partID)
+		go c.Release()
+		return false
+	}
+
+	// If the consumer group owning this claim is paused, we must release this claim.
+	if c.marshal.cluster.IsGroupPaused(c.marshal.GroupID()) {
+		log.Infof("[%s:%d] consumer group %s is paused, claim releasing",
+			c.topic, c.partID, c.marshal.GroupID())
 		go c.Release()
 		return false
 	}

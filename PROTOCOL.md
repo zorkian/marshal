@@ -57,7 +57,8 @@ The protocol is defined with several simple messages:
    **partition**, **proposed_last_offset** is used for the At Most Once consumption flow.
 1. `ReleaseGroup` which includes **client_id**, **group_id**, **msg_expire_time**. This message
    is sent by a special Admin actor, which can pause an entire consumer group identified
-   by the **group_id**, until **msg_expire_time**.
+   by the **group_id**, until **msg_expire_time**. This message is used to set a consumer
+   group's position. See the section "Setting Consumer Group Position."
 
 ## Determining World State
 
@@ -181,6 +182,10 @@ to claim that partition, starting that whole process.
 In the ALO consumption case, this can lead to two consumers running on a single batch
 of messages at the same time, but it is constrained to one batch. The AMO consumer cannot
 have that failure case, at worst it will never process some messages.
+
+## Setting Consumer Group Position
+
+Documentation being written.
 
 # TODO
 
