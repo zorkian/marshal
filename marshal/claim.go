@@ -507,7 +507,7 @@ func (c *claim) healthCheck() bool {
 	// If the consumer is moving as fast or faster than the partition and the consumer is
 	// at least moving, consider it healthy. This case is true in the standard catching
 	// up from behind case.
-	if partitionVelocity < consumerVelocity || (partitionVelocity <= 0 && consumerVelocity > 0) {
+	if partitionVelocity < consumerVelocity {
 		log.Infof("[%s:%d] consumer catching up: consume ∆ %0.2f >= produce ∆ %0.2f",
 			c.topic, c.partID, consumerVelocity, partitionVelocity)
 		c.cyclesBehind = 0
