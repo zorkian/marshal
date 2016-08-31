@@ -554,7 +554,41 @@ func (s *ClaimSuite) TestHealthCheck(c *C) {
 	c.Assert(s.cl.healthCheck(), Equals, true)
 	c.Assert(s.cl.cyclesBehind, Equals, 0)
 
+	// Test that PV=0, CV=0 but behind is unhealthy
+	s.cl.offsets.Current = 21
+	s.cl.offsetCurrentHistory = [10]int64{21, 21, 21, 21, 21, 21, 21, 21, 21, 21}
+	s.cl.offsets.Latest = 23
+	s.cl.offsetLatestHistory = [10]int64{23, 23, 23, 23, 23, 23, 23, 23, 23, 23}
+	c.Assert(s.cl.ConsumerVelocity(), Equals, float64(0))
+	c.Assert(s.cl.PartitionVelocity(), Equals, float64(0))
+	c.Assert(s.cl.ConsumerVelocity() == s.cl.PartitionVelocity(), Equals, true)
+	c.Assert(s.cl.healthCheck(), Equals, true)
+	c.Assert(s.cl.cyclesBehind, Equals, 1)
+	c.Assert(s.cl.healthCheck(), Equals, true)
+	c.Assert(s.cl.cyclesBehind, Equals, 2)
+
+	// Now we advance one message, giving us SOME velocity -- even tho PV is still 0
+	// this should make us healthy
+	s.cl.offsets.Current = 22
+	s.cl.offsetCurrentHistory = [10]int64{21, 21, 21, 21, 21, 21, 21, 21, 21, 22}
+	c.Assert(s.cl.PartitionVelocity(), Equals, float64(0))
+	c.Assert(s.cl.ConsumerVelocity() > s.cl.PartitionVelocity(), Equals, true)
+	c.Assert(s.cl.healthCheck(), Equals, true)
+	c.Assert(s.cl.cyclesBehind, Equals, 0)
+
+	// Now handle the "far behind but catching up" case, CV>PV but beyond the prediction
+	s.cl.offsets.Current = 31
+	s.cl.offsetCurrentHistory = [10]int64{21, 22, 23, 24, 26, 27, 28, 29, 30, 31}
+	s.cl.offsets.Latest = 132
+	s.cl.offsetLatestHistory = [10]int64{123, 124, 125, 126, 127, 128, 129, 130, 131, 132}
+	c.Assert(s.cl.PartitionVelocity(), Equals, float64(1))
+	c.Assert(s.cl.ConsumerVelocity() > s.cl.PartitionVelocity(), Equals, true)
+	c.Assert(s.cl.healthCheck(), Equals, true)
+	c.Assert(s.cl.cyclesBehind, Equals, 0)
+
 	// Now we're behind and fail health checks 3 times, this will release
+	s.cl.offsets.Current = 22
+	s.cl.offsetCurrentHistory = [10]int64{21, 21, 21, 21, 21, 21, 21, 21, 21, 22}
 	s.cl.offsets.Latest = 32
 	s.cl.offsetLatestHistory = [10]int64{1, 11, 21, 32, 0, 0, 0, 0, 0, 0}
 	c.Assert(s.cl.ConsumerVelocity() < s.cl.PartitionVelocity(), Equals, true)
@@ -567,7 +601,7 @@ func (s *ClaimSuite) TestHealthCheck(c *C) {
 	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Equals, int64(0))
 	c.Assert(s.m.GetPartitionClaim("test16", 0).CurrentOffset, Equals, int64(0))
-	c.Assert(s.m.GetLastPartitionClaim("test16", 0).CurrentOffset, Equals, int64(21))
+	c.Assert(s.m.GetLastPartitionClaim("test16", 0).CurrentOffset, Equals, int64(22))
 
 	// If we are okay with CV<PV we shouldn't release
 	opts := NewConsumerOptions()
