@@ -301,6 +301,7 @@ func (c *KafkaCluster) getTopicPartitions(topicName string) int {
 func (c *KafkaCluster) removeMarshal(m *Marshaler) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
+
 	for i, ml := range c.marshalers {
 		if ml == m {
 			c.marshalers = append(c.marshalers[:i], c.marshalers[i+1:]...)
@@ -335,6 +336,7 @@ func (c *KafkaCluster) pauseConsumerGroup(groupID string, adminID string, expiry
 func (c *KafkaCluster) IsGroupPaused(groupID string) bool {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
+
 	if res, ok := c.pausedGroups[groupID]; !ok {
 		return false
 	} else {
@@ -358,8 +360,8 @@ func (c *KafkaCluster) Terminate() {
 	}
 	c.marshalers = nil
 
-	// Close the broker!
-	c.broker.Close()
+	// Close the broker asynchronously to prevent blocking on potential network I/O
+	go c.broker.Close()
 }
 
 // Terminated returns whether or not we have been terminated.

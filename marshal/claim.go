@@ -181,7 +181,7 @@ func (c *claim) setup() {
 // processing a message. This updates our tracking structure so the heartbeat knows how
 // far ahead it can move our offset.
 func (c *claim) Commit(offset int64) error {
-	if c.Terminated() || !c.Claimed() {
+	if c.Terminated() {
 		return fmt.Errorf("[%s:%d] is no longer claimed; can't commit offset %d",
 			c.topic, c.partID, offset)
 	}
@@ -207,14 +207,6 @@ func (c *claim) Commit(offset int64) error {
 	return nil
 }
 
-// Claimed returns whether or not this claim structure is alive and well and believes
-// that it is still an active claim. This is based on Marshal's state of the world.
-func (c *claim) Claimed() bool {
-	claim := c.marshal.GetPartitionClaim(c.topic, c.partID)
-	return claim.ClientID == c.marshal.ClientID() &&
-		claim.GroupID == c.marshal.GroupID()
-}
-
 // Terminated returns whether the consumer has terminated the Claim. The claim may or may NOT
 // remain claimed depending on whether it was released or not.
 func (c *claim) Terminated() bool {
@@ -237,7 +229,7 @@ func (c *claim) GetCurrentLag() int64 {
 func (c *claim) Flush() error {
 	// By definition a terminated claim has already flushed anything it can flush
 	// or we've lost the lock so there's nothing we can do. It's not an error.
-	if c.Terminated() || !c.Claimed() {
+	if c.Terminated() {
 		return nil
 	}
 
@@ -320,7 +312,7 @@ func (c *claim) messagePump() {
 	// This method MUST NOT make changes to the claim structure. Since we might
 	// be running while someone else has the lock, and we can't get it ourselves, we are
 	// forbidden to touch anything other than the consumer and the message channel.
-	for c.Claimed() && !c.Terminated() {
+	for !c.Terminated() {
 		msg, err := c.kafkaConsumer.Consume()
 		if err == proto.ErrOffsetOutOfRange {
 			// Fell out of range, presumably because we're handling this too slow, so
@@ -388,7 +380,7 @@ func (c *claim) messagePump() {
 // partition.
 func (c *claim) heartbeat() bool {
 	// Unclaimed partitions don't heartbeat.
-	if c.Terminated() || !c.Claimed() {
+	if c.Terminated() {
 		return false
 	}
 
@@ -457,7 +449,7 @@ func (c *claim) updateCurrentOffsets() bool {
 // partition is healthy, else false.
 func (c *claim) healthCheck() bool {
 	// Unclaimed partitions aren't healthy.
-	if c.Terminated() || !c.Claimed() {
+	if c.Terminated() {
 		return false
 	}
 
@@ -534,17 +526,18 @@ func (c *claim) healthCheck() bool {
 	return true
 }
 
-// healthCheckLoop runs regularly and will perform a health check. Exits when we are no longer
-// a claimed partition
+// healthCheckLoop runs regularly and will perform a health check. Exits when this claim
+// has been terminated.
 func (c *claim) healthCheckLoop() {
 	time.Sleep(<-c.marshal.cluster.jitters)
-	for c.Claimed() && !c.Terminated() {
+	for !c.Terminated() {
 		if c.healthCheck() {
 			go c.heartbeat()
 		}
 		time.Sleep(<-c.marshal.cluster.jitters)
 	}
-	log.Debugf("[%s:%d] health check loop exiting", c.topic, c.partID)
+	log.Infof("[%s:%d] health check loop exiting, claim terminated",
+		c.topic, c.partID)
 }
 
 // average returns the average of a given slice of int64s. It ignores 0s as
@@ -628,8 +621,11 @@ func (c *claim) PrintState() {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 
+	// "Claimed" status is from Marshal rationalizer, and "Terminated" status is from
+	// the local claim object (indicates we've exited somehow)
 	state := "----"
-	if c.Claimed() {
+	cl := c.marshal.GetPartitionClaim(c.topic, c.partID)
+	if cl.Claimed() {
 		if c.Terminated() {
 			state = "CL+T"
 		} else {

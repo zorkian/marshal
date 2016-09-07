@@ -325,17 +325,35 @@ func (s *ClaimSuite) BenchmarkOrderedConsumeAndCommit(c *C) {
 func (s *ClaimSuite) assertRelease(c *C) {
 	for i := 0; i < 100; i++ {
 		time.Sleep(30 * time.Millisecond)
-		if s.cl.Claimed() == false {
+
+		cl := s.cl.marshal.GetPartitionClaim(s.cl.topic, s.cl.partID)
+		if !cl.Claimed() {
 			break
 		}
 	}
-	c.Assert(s.cl.Claimed(), Equals, false)
+
+	cl := s.cl.marshal.GetPartitionClaim(s.cl.topic, s.cl.partID)
+	c.Assert(cl.Claimed(), Equals, false)
+}
+
+func (s *ClaimSuite) assertNoRelease(c *C) {
+	for i := 0; i < 100; i++ {
+		time.Sleep(30 * time.Millisecond)
+
+		cl := s.cl.marshal.GetPartitionClaim(s.cl.topic, s.cl.partID)
+		if cl.Claimed() {
+			break
+		}
+	}
+
+	cl := s.cl.marshal.GetPartitionClaim(s.cl.topic, s.cl.partID)
+	c.Assert(cl.Claimed(), Equals, true)
 }
 
 func (s *ClaimSuite) TestRelease(c *C) {
 	// Test that calling Release on a claim properly releases the partition
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
-	c.Assert(s.cl.Claimed(), Equals, true)
+	c.Assert(s.cl.Terminated(), Equals, false)
 	c.Assert(s.cl.Release(), Equals, true)
 	s.assertRelease(c)
 	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
@@ -344,18 +362,19 @@ func (s *ClaimSuite) TestRelease(c *C) {
 }
 
 func (s *ClaimSuite) TestTerminate(c *C) {
-	// Test that calling Release on a claim properly sets the flag and commits offsets
-	// for the partition
+	// Test that calling Terminate on a claim properly sets the flag and commits offsets
+	// for the partition but does not release
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
-	c.Assert(s.cl.Claimed(), Equals, true)
+	c.Assert(s.cl.Terminated(), Equals, false)
 	c.Assert(s.cl.Terminate(), Equals, true)
-	c.Assert(s.cl.Claimed(), Equals, true)
+	c.Assert(s.cl.Terminated(), Equals, true)
+	s.assertNoRelease(c)
 }
 
 func (s *ClaimSuite) TestTerminateDoesNotDeadlock(c *C) {
 	// Test that termination is not blocked by a full messages channel
 	c.Assert(s.m.GetPartitionClaim("test16", 0).LastHeartbeat, Not(Equals), int64(0))
-	c.Assert(s.cl.Claimed(), Equals, true)
+	c.Assert(s.cl.Terminated(), Equals, false)
 
 	// Replace message chan with length 1 chan for testing
 	s.cl.lock.Lock()
@@ -391,8 +410,9 @@ func (s *ClaimSuite) TestTerminateDoesNotDeadlock(c *C) {
 	c.Assert(<-probablyHeld, Equals, true)
 
 	// Now terminate, this should return and work and not be claimed
-	c.Assert(s.cl.Terminate(), Equals, true)
-	c.Assert(s.cl.Claimed(), Equals, true)
+	c.Assert(s.cl.Release(), Equals, true)
+	c.Assert(s.cl.Terminated(), Equals, true)
+	s.assertRelease(c)
 }
 
 func (s *ClaimSuite) TestCommitOutstanding(c *C) {

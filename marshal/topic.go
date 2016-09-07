@@ -32,7 +32,7 @@ func (ts *topicState) PrintState() {
 	now := time.Now().Unix()
 	for partID, claim := range ts.partitions {
 		state := "CLMD"
-		if !claim.isClaimed(now) {
+		if !claim.claimed(now) {
 			state = "----"
 		}
 		log.Infof("      * %2d [%s]: GPID %s | CLID %s | LHB %d (%d) | LOF %d | PCL %d",
@@ -77,17 +77,28 @@ type PartitionOffsets struct {
 
 // PartitionClaim contains claim information about a given partition.
 type PartitionClaim struct {
+	InstanceID    string
+	ClientID      string
+	GroupID       string
 	LastRelease   int64
 	LastHeartbeat int64
 	CurrentOffset int64
-	ClientID      string
-	GroupID       string
 
 	// Used internally when someone is waiting on this partition to be claimed.
 	pendingClaims []chan struct{}
 }
 
-// isClaimed returns a boolean indicating whether or not this structure is indicating a
+// checkOwnership compares the ClientID/GroupID (and optionally InstanceID) of a given
+// claim to a given message and returns whether or not they match.
+func (p *PartitionClaim) checkOwnership(msg message, checkInstanceID bool) bool {
+	iid, cid, gid := msg.Ownership()
+	if p.ClientID != cid || p.GroupID != gid {
+		return false
+	}
+	return !checkInstanceID || p.InstanceID == iid
+}
+
+// claimed returns a boolean indicating whether or not this structure is indicating a
 // still valid claim. Validity is based on the delta between NOW and lastHeartbeat:
 //
 // delta = 0 .. HeartbeatInterval: claim good.
@@ -96,7 +107,7 @@ type PartitionClaim struct {
 //
 // This means that the worst case for a "dead consumer" that has failed to heartbeat
 // is that a partition will be idle for twice the heartbeat interval.
-func (p *PartitionClaim) isClaimed(ts int64) bool {
+func (p *PartitionClaim) claimed(ts int64) bool {
 	// If lastHeartbeat is 0, then the partition is unclaimed
 	if p.LastHeartbeat == 0 {
 		return false
@@ -122,4 +133,10 @@ func (p *PartitionClaim) isClaimed(ts int64) bool {
 		// Stale claim - no longer valid
 		return false
 	}
+}
+
+// Claimed returns whether or not the PartitionClaim indicates a valid (as of this
+// invocation) claim.
+func (p *PartitionClaim) Claimed() bool {
+	return p.claimed(0)
 }
