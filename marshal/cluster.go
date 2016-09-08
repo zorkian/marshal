@@ -240,38 +240,76 @@ func (c *KafkaCluster) getClaimPartition(topicName string) int {
 	return int(uval % uint64(c.partitions))
 }
 
-// getPartitionState returns a topicState and possibly creates it and the partition state within
-// the State.
-func (c *KafkaCluster) getPartitionState(groupID, topicName string, partID int) *topicState {
+// getGroupState returns the map of topics to topicState objects for a group.
+func (c *KafkaCluster) getGroupState(groupID string) map[string]*topicState {
+	// Read lock check
+	c.lock.RLock()
+	if group, ok := c.groups[groupID]; ok {
+		c.lock.RUnlock()
+		return group
+	}
+	c.lock.RUnlock()
+
+	// Failed, write lock check and possible create
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	group, ok := c.groups[groupID]
-	if !ok {
-		group = make(map[string]*topicState)
-		c.groups[groupID] = group
+	if group, ok := c.groups[groupID]; ok {
+		return group
 	}
+	c.groups[groupID] = make(map[string]*topicState)
+	return c.groups[groupID]
+}
 
-	topic, ok := group[topicName]
-	if !ok {
-		topic = &topicState{
-			claimPartition: c.getClaimPartition(topicName),
-			partitions:     make([]PartitionClaim, partID+1),
-		}
-		group[topicName] = topic
+// getTopicState returns a topicState for a given topic.
+func (c *KafkaCluster) getTopicState(groupID, topicName string) *topicState {
+	group := c.getGroupState(groupID)
+
+	// Read lock check
+	c.lock.RLock()
+	if topic, ok := group[topicName]; ok {
+		c.lock.RUnlock()
+		return topic
 	}
+	c.lock.RUnlock()
 
-	// Take the topic lock if we can
+	// Write lock check and possible create
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	if topic, ok := group[topicName]; ok {
+		return topic
+	}
+	group[topicName] = &topicState{
+		claimPartition: c.getClaimPartition(topicName),
+		partitions:     nil,
+	}
+	return group[topicName]
+}
+
+// getPartitionState returns a topicState and possibly creates it and the partition state within
+// the State.
+func (c *KafkaCluster) getPartitionState(groupID, topicName string, partID int) *topicState {
+	// Get topic and lock it so we can update it if needed
+	topic := c.getTopicState(groupID, topicName)
+
+	// Read lock check
+	topic.lock.RLock()
+	if len(topic.partitions) > partID {
+		topic.lock.RUnlock()
+		return topic
+	}
+	topic.lock.RUnlock()
+
+	// Must upgrade, looks like we need a new partition
 	topic.lock.Lock()
 	defer topic.lock.Unlock()
 
-	// They might be referring to a partition we don't know about, maybe extend it
 	if len(topic.partitions) < partID+1 {
 		for i := len(topic.partitions); i <= partID; i++ {
 			topic.partitions = append(topic.partitions, PartitionClaim{})
 		}
 	}
-
 	return topic
 }
 
