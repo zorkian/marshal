@@ -64,71 +64,74 @@ func NewWorld() *Marshaler {
 	}
 }
 
-func heartbeat(ts int, cl, gr, t string, id int, lo int64) *msgHeartbeat {
+func heartbeat(ts int, ii, cl, gr, t string, id int, lo int64) *msgHeartbeat {
 	return &msgHeartbeat{
 		msgBase: msgBase{
-			Time:     ts,
-			ClientID: cl,
-			GroupID:  gr,
-			Topic:    t,
-			PartID:   id,
+			Time:       ts,
+			InstanceID: ii,
+			ClientID:   cl,
+			GroupID:    gr,
+			Topic:      t,
+			PartID:     id,
 		},
 		CurrentOffset: lo,
 	}
 }
 
-func claimingPartition(ts int, cl, gr, t string, id int) *msgClaimingPartition {
+func claimingPartition(ts int, ii, cl, gr, t string, id int) *msgClaimingPartition {
 	return &msgClaimingPartition{
 		msgBase: msgBase{
-			Time:     ts,
-			ClientID: cl,
-			GroupID:  gr,
-			Topic:    t,
-			PartID:   id,
+			Time:       ts,
+			InstanceID: ii,
+			ClientID:   cl,
+			GroupID:    gr,
+			Topic:      t,
+			PartID:     id,
 		},
 	}
 }
 
-func releasingPartition(ts int, cl, gr, t string, id int, lo int64) *msgReleasingPartition {
+func releasingPartition(ts int, ii, cl, gr, t string, id int, lo int64) *msgReleasingPartition {
 	return &msgReleasingPartition{
 		msgBase: msgBase{
-			Time:     ts,
-			ClientID: cl,
-			GroupID:  gr,
-			Topic:    t,
-			PartID:   id,
+			Time:       ts,
+			InstanceID: ii,
+			ClientID:   cl,
+			GroupID:    gr,
+			Topic:      t,
+			PartID:     id,
 		},
 		CurrentOffset: lo,
 	}
 }
 
-func (s *RationalizerSuite) TestIsClaimed(c *C) {
+func (s *RationalizerSuite) TestClaimed(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
-	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
+	s.out <- heartbeat(1, "ii", "cl", "gr", "test1", 0, 0)
 	c.Assert(s.m.cluster.waitForRsteps(1), Equals, 1)
 
 	// They heartbeated at 1, should be claimed as of 1.
 	s.m.cluster.ts = 1
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, true)
+	c.Assert(s.m.Claimed("test1", 0), Equals, true)
 
 	// Should still be claimed immediately after the interval
 	s.m.cluster.ts = HeartbeatInterval + 2
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, true)
+	c.Assert(s.m.Claimed("test1", 0), Equals, true)
 
 	// And still claimed right at the last second of the cutoff
 	s.m.cluster.ts = HeartbeatInterval * 2
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, true)
+	c.Assert(s.m.Claimed("test1", 0), Equals, true)
 
 	// Should NOT be claimed >2x the heartbeat interval
 	s.m.cluster.ts = HeartbeatInterval*2 + 1
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, false)
+	c.Assert(s.m.Claimed("test1", 0), Equals, false)
 }
 
 func (s *RationalizerSuite) TestClaimNotMutable(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
-	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
+	s.out <- heartbeat(1, "ii", "cl", "gr", "test1", 0, 0)
 	c.Assert(s.m.cluster.waitForRsteps(1), Equals, 1)
 
 	// They heartbeated at 1, should be claimed as of 1.
@@ -146,7 +149,7 @@ func (s *RationalizerSuite) TestClaimNotMutable(c *C) {
 func (s *RationalizerSuite) TestClaimNotOurs(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
-	s.out <- heartbeat(1, "cl", "grother", "test1", 0, 0)
+	s.out <- heartbeat(1, "ii", "cl", "grother", "test1", 0, 0)
 	c.Assert(s.m.cluster.waitForRsteps(1), Equals, 1)
 
 	// They heartbeated at 1, but since we have a different groupID, this should say that
@@ -166,7 +169,7 @@ func (s *RationalizerSuite) TestClaimPartition(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
 	s.m.cluster.ts = 30
-	s.out <- claimingPartition(1, "cl", "gr", "test1", 0)
+	s.out <- claimingPartition(1, "ii", "cl", "gr", "test1", 0)
 
 	select {
 	case <-s.ret:
@@ -182,9 +185,9 @@ func (s *RationalizerSuite) TestReclaimPartition(c *C) {
 	// This log is us having the partition (HB) + a CP from someone else + a CP from us,
 	// this should result in us owning the partition + the other person not
 	s.m.cluster.ts = 30
-	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
-	s.out <- claimingPartition(2, "clother", "gr", "test1", 0)
-	s.out <- claimingPartition(3, "cl", "gr", "test1", 0)
+	s.out <- heartbeat(1, "ii", "cl", "gr", "test1", 0, 0)
+	s.out <- claimingPartition(2, "ii", "clother", "gr", "test1", 0)
+	s.out <- claimingPartition(3, "ii", "cl", "gr", "test1", 0)
 
 	select {
 	case <-s.ret:
@@ -200,64 +203,64 @@ func (s *RationalizerSuite) TestReclaimPartition(c *C) {
 func (s *RationalizerSuite) TestReleaseClaim(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
-	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
+	s.out <- heartbeat(1, "ii", "cl", "gr", "test1", 0, 0)
 	c.Assert(s.m.cluster.waitForRsteps(1), Equals, 1)
 
 	// They heartbeated at 1, should be claimed as of 1.
 	s.m.cluster.ts = 1
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, true)
+	c.Assert(s.m.Claimed("test1", 0), Equals, true)
 
 	// Someone else attempts to release the claim, this shouldn't work
-	s.out <- releasingPartition(20, "cl-bad", "gr", "test1", 0, 5)
+	s.out <- releasingPartition(20, "ii", "cl-bad", "gr", "test1", 0, 5)
 	c.Assert(s.m.cluster.waitForRsteps(2), Equals, 2)
 
 	// Must be unclaimed, invalid release
 	s.m.cluster.ts = 25
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, true)
+	c.Assert(s.m.Claimed("test1", 0), Equals, true)
 
 	// Now they release it at position 10
-	s.out <- releasingPartition(30, "cl", "gr", "test1", 0, 10)
+	s.out <- releasingPartition(30, "ii", "cl", "gr", "test1", 0, 10)
 	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
 	c.Assert(s.m.GetLastPartitionClaim("test1", 0).LastHeartbeat, Equals, int64(0))
 	c.Assert(s.m.GetLastPartitionClaim("test1", 0).LastRelease, Equals, int64(30))
 
 	// They released at 30, should be free as of 31
 	s.m.cluster.ts = 31
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, false)
+	c.Assert(s.m.Claimed("test1", 0), Equals, false)
 	c.Assert(s.m.GetLastPartitionClaim("test1", 0).CurrentOffset, Equals, int64(10))
 }
 
 func (s *RationalizerSuite) TestClaimHandoff(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
-	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
+	s.out <- heartbeat(1, "ii", "cl", "gr", "test1", 0, 0)
 	c.Assert(s.m.cluster.waitForRsteps(1), Equals, 1)
 
 	// They heartbeated at 1, should be claimed as of 1.
 	s.m.cluster.ts = 1
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, true)
+	c.Assert(s.m.Claimed("test1", 0), Equals, true)
 
 	// Now they hand this off to someone else who picks up the heartbeat
-	s.out <- heartbeat(10, "cl2", "gr", "test1", 0, 10)
+	s.out <- heartbeat(10, "ii", "cl2", "gr", "test1", 0, 10)
 	c.Assert(s.m.cluster.waitForRsteps(2), Equals, 2)
 
 	// Must be claimed, and claimed by cl2
 	s.m.cluster.ts = 25
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, true)
+	c.Assert(s.m.Claimed("test1", 0), Equals, true)
 	c.Assert(s.m.GetPartitionClaim("test1", 0).ClientID, Equals, "cl2")
 
 	// Now we change the group ID of our world state (which client's can't do) and validate
 	// that these partitions are NOT claimed
 	s.m.cluster.ts = 25
 	s.m.groupID = "gr2"
-	c.Assert(s.m.IsClaimed("test1", 0), Equals, false)
+	c.Assert(s.m.Claimed("test1", 0), Equals, false)
 	c.Assert(s.m.GetPartitionClaim("test1", 0).ClientID, Equals, "")
 }
 
 func (s *RationalizerSuite) TestPartitionExtend(c *C) {
 	// This log, a single heartbeat at t=0, indicates that this topic/partition are claimed
 	// by the client/group given.
-	s.out <- heartbeat(1, "cl", "gr", "test1", 0, 0)
+	s.out <- heartbeat(1, "ii", "cl", "gr", "test1", 0, 0)
 	c.Assert(s.m.cluster.waitForRsteps(1), Equals, 1)
 
 	// Ensure len is 1
@@ -268,7 +271,7 @@ func (s *RationalizerSuite) TestPartitionExtend(c *C) {
 	s.m.lock.RUnlock()
 
 	// Extend by 4
-	s.out <- heartbeat(2, "cl2", "gr", "test1", 4, 0)
+	s.out <- heartbeat(2, "ii", "cl2", "gr", "test1", 4, 0)
 	c.Assert(s.m.cluster.waitForRsteps(2), Equals, 2)
 
 	// Ensure len is 5

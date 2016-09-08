@@ -158,46 +158,53 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 	go c.sendTopicClaimsLoop()
 
 	// Fast-reclaim: iterate over existing claims in the given topics and see if
-	// any of them look to be ours. Do this before the claim manager kicks off.
+	// any of them look to be from previous incarnations of this Marshal (client, group)
+	// and are currently claimed. If so, claim them. Do this before the claim manager
+	// is started.
 	if c.options.FastReclaim {
 		claimedTopics := make(map[string]bool)
 		for topic, partitionCount := range c.partitions {
 			for partID := 0; partID < partitionCount; partID++ {
 				cl := c.marshal.GetPartitionClaim(topic, partID)
-				if cl.ClientID == c.marshal.ClientID() &&
-					cl.GroupID == c.marshal.GroupID() {
-					// This looks to be ours, let's do it. This is basically the fast path,
-					// and our heartbeat will happen shortly from the automatic health
-					// check which fires up immediately on newClaim.
-					log.Infof("[%s:%d] attempting to fast-reclaim", topic, partID)
-					if _, ok := c.claims[topic]; !ok {
-						c.claims[topic] = make(map[int]*claim)
+
+				// If not presently claimed, or not claimed by us, skip
+				if !cl.Claimed() ||
+					cl.ClientID != c.marshal.ClientID() ||
+					cl.GroupID != c.marshal.GroupID() {
+					continue
+				}
+
+				// This looks to be ours, let's do it. This is basically the fast path,
+				// and our heartbeat will happen shortly from the automatic health
+				// check which fires up immediately on newClaim.
+				log.Infof("[%s:%d] attempting to fast-reclaim", topic, partID)
+				if _, ok := c.claims[topic]; !ok {
+					c.claims[topic] = make(map[int]*claim)
+				}
+
+				// update topic claims
+				if options.ClaimEntireTopic {
+					if partID == 0 {
+						claimedTopics[topic] = true
 					}
 
-					// update topic claims
-					if options.ClaimEntireTopic {
-						if partID == 0 {
-							claimedTopics[topic] = true
-						}
-
-						// don't fast re-claim partitions for a topic unless partition 0 is claimed
-						if !claimedTopics[topic] {
-							log.Infof("[%s:%d] blocked fast-reclaim because topic is not claimed",
-								topic, partID)
-							continue
-						}
+					// don't fast re-claim partitions for a topic unless partition 0 is claimed
+					if !claimedTopics[topic] {
+						log.Infof("[%s:%d] blocked fast-reclaim because topic is not claimed",
+							topic, partID)
+						continue
 					}
+				}
 
-					// Attempt to claim, this can fail
-					claim := newClaim(
-						topic, partID, c.marshal, c, c.messages, options)
-					if claim == nil {
-						log.Warningf("[%s:%d] failed to fast-reclaim", topic, partID)
-					} else {
-						c.claims[topic][partID] = claim
-						go claim.healthCheckLoop()
-						c.sendTopicClaimsUpdate()
-					}
+				// Attempt to claim, this can fail
+				claim := newClaim(
+					topic, partID, c.marshal, c, c.messages, options)
+				if claim == nil {
+					log.Warningf("[%s:%d] failed to fast-reclaim", topic, partID)
+				} else {
+					c.claims[topic][partID] = claim
+					go claim.healthCheckLoop()
+					c.sendTopicClaimsUpdate()
 				}
 			}
 
@@ -305,23 +312,34 @@ func (c *Consumer) tryClaimPartition(topic string, partID int) bool {
 		}
 	}
 
-	// Partition unclaimed by us, see if it's claimed by anybody
+	// See if partition is presently claimed by anybody, if so, do nothing. This is an
+	// optimization but overall the whole system is racy and that race is handled elsewhere.
+	// This gives us no protection.
 	currentClaim := c.marshal.GetPartitionClaim(topic, partID)
-	if currentClaim.LastHeartbeat > 0 {
+	if currentClaim.Claimed() {
 		return false
 	}
 
-	// Set up internal claim structure we'll track things in, this can block for a while
-	// as it talks to Kafka and waits for rationalizers.
+	// Attempt to claim. This handles asynchronously and might ultimately fail because
+	// someone beat us to the claim or we failed to produce to Kafka or something. This can
+	// block for a while.
 	newClaim := newClaim(topic, partID, c.marshal, c, c.messages, c.options)
 	if newClaim == nil {
 		return false
 	}
 	go newClaim.healthCheckLoop()
 
-	// Critical section. Engage the lock here, we hold it until we exit.
+	// Critical section. Engage the lock here, we hold it until we exit. This lock can take
+	// some time to get, so the following code has to be resilient to state changes that might
+	// happen due to lock dilation.
 	c.lock.Lock()
 	defer c.lock.Unlock()
+
+	// If claim says it's terminated, do nothing and exit. This can happen if something
+	// in the claim failed to produce to Kafka.
+	if newClaim.Terminated() {
+		return false
+	}
 
 	// Ugh, we managed to claim a partition in our termination state. Don't worry too hard
 	// and just release it.
@@ -333,21 +351,23 @@ func (c *Consumer) tryClaimPartition(topic string, partID int) bool {
 		return false
 	}
 
-	// Ensure we don't have another valid claim in this slot. This shouldn't happen and if
-	// it does we treat it as fatal. If this fires, it indicates with high likelihood there
-	// is a bug in the Marshal state machine somewhere.
+	// If we have an old claim (i.e. this is a reclaim) then assert that the old claim has
+	// been properly terminated. If not, then this could indicate a bug in the Marshal state
+	// machine.
 	topicClaims, ok := c.claims[topic]
 	if ok {
 		oldClaim, ok := topicClaims[partID]
 		if ok && oldClaim != nil {
-			if oldClaim.Claimed() {
+			if !oldClaim.Terminated() {
 				log.Errorf("Internal double-claim for %s:%d.", topic, partID)
 				log.Errorf("This is a catastrophic error. We're terminating Marshal.")
 				log.Errorf("No further messages will be available. Please restart.")
+				go newClaim.Release()
 				go func() {
 					c.marshal.PrintState()
 					c.marshal.Terminate()
 				}()
+				return false
 			}
 		}
 	}
@@ -377,7 +397,7 @@ func (c *Consumer) releaseClaims() {
 	// Release all claims that this consumer keeps track of and remove them from the claims map.
 	for topic, partitions := range c.claims {
 		for partID, claim := range partitions {
-			if claim.Claimed() {
+			if !claim.Terminated() {
 				log.Warningf("[%s:%d] Consumer still paused, releasing claim",
 					topic, partID)
 				claim.Release()
@@ -419,7 +439,7 @@ func (c *Consumer) claimPartitions() {
 
 		// Get the most recent claim for this partition
 		lastClaim := c.marshal.GetLastPartitionClaim(topic, partID)
-		if lastClaim.isClaimed(time.Now().Unix()) {
+		if lastClaim.Claimed() {
 			continue
 		}
 
@@ -460,9 +480,10 @@ func (c *Consumer) isTopicClaimLimitReached(topic string) bool {
 
 	c.lock.RLock()
 	defer c.lock.RUnlock()
+
 	claimed := make(map[string]bool)
 	for topic, topicClaims := range c.claims {
-		if claim, ok := topicClaims[0]; ok && claim.Claimed() {
+		if claim, ok := topicClaims[0]; ok && !claim.Terminated() {
 			claimed[topic] = true
 		}
 	}
@@ -501,7 +522,7 @@ func (c *Consumer) claimTopics() {
 		// We use partition 0 as our "key". Whoever claims partition 0 is considered the owner of
 		// the topic. See if partition 0 is claimed or not.
 		lastClaim := c.marshal.GetLastPartitionClaim(topic, 0)
-		if lastClaim.isClaimed(time.Now().Unix()) {
+		if lastClaim.Claimed() {
 			// If it's not claimed by us, return.
 			if lastClaim.GroupID != c.marshal.groupID ||
 				lastClaim.ClientID != c.marshal.clientID {
@@ -535,7 +556,7 @@ func (c *Consumer) claimTopics() {
 		// We either just claimed or we have already owned the 0th partition. Let's iterate
 		// through all partitions and attempt to claim any that we don't own yet.
 		for partID := 1; partID < partitions; partID++ {
-			if !c.marshal.IsClaimed(topic, partID) {
+			if !c.marshal.Claimed(topic, partID) {
 				log.Infof("[%s:%d] claiming partition (topic claim mode)\n", topic, partID)
 				c.tryClaimPartition(topic, partID)
 			}
@@ -766,7 +787,7 @@ func (c *Consumer) GetCurrentLag() int64 {
 	var lag int64
 	for _, topicClaims := range c.claims {
 		for _, cl := range topicClaims {
-			if cl.Claimed() {
+			if !cl.Terminated() {
 				lag += cl.GetCurrentLag()
 			}
 		}
@@ -788,7 +809,7 @@ func (c *Consumer) getNumActiveClaims() (ct int) {
 
 	for _, topicClaims := range c.claims {
 		for _, cl := range topicClaims {
-			if cl.Claimed() {
+			if !cl.Terminated() {
 				ct++
 			}
 		}

@@ -532,7 +532,8 @@ func (s *ConsumerSuite) TestCommittedOffset(c *C) {
 	c.Assert(offset, Equals, int64(3))
 	c.Assert(cl.Release(), Equals, true)
 	c.Assert(s.m.cluster.waitForRsteps(4), Equals, 4)
-	c.Assert(cl.Claimed(), Equals, false)
+	clm := cl.marshal.GetPartitionClaim(cl.topic, cl.partID)
+	c.Assert(clm.Claimed(), Equals, false)
 	s.cn.claims[s.cn.defaultTopic()][0] = nil
 
 	// Now let's "downcommit" the offset back to an earlier value, and then re-claim the
@@ -775,4 +776,36 @@ func (s *ConsumerSuite) TestConsumerRemovesSelfFromMarshal(c *C) {
 	c.Assert(s.m.consumers, DeepEquals, []*Consumer{s.cn})
 	s.cn.Terminate(true)
 	c.Assert(s.cn.marshal.consumers, DeepEquals, []*Consumer{})
+}
+
+func (s *ConsumerSuite) TestDoubleClaim(c *C) {
+	// This reproduces an issue we've seen where the consumer can get into a state
+	// where it thinks it needs to terminate and it doesn't.
+	//
+	// Consumer (cl, gr) claims partition. Then releases.
+	// Lock is held on consumer.
+	// Consumer.tryClaimPartition is called.
+	// Rationalizer processes successful claim while lock is still held.
+	// Eventually, lock is released.
+	// Consumer "detects" double claim and dies.
+
+	cn := NewTestConsumer(s.m, []string{"test1"})
+	defer cn.Terminate(true)
+
+	// Claim a partition and release
+	c.Assert(cn.tryClaimPartition("test1", 0), Equals, true)
+	cn.claims["test1"][0].Release()
+	c.Assert(s.m.cluster.waitForRsteps(3), Equals, 3)
+
+	// Now take the lock, then claim again
+	cn.lock.Lock()
+	go func() {
+		time.Sleep(time.Second)
+		cn.lock.Unlock()
+	}()
+	c.Assert(cn.tryClaimPartition("test1", 0), Equals, true)
+	c.Assert(s.m.cluster.waitForRsteps(5), Equals, 5)
+
+	// If we get this far, the test has passed and we didn't exit.
+	c.Assert(cn.Terminated(), Equals, false)
 }

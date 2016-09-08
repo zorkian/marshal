@@ -55,6 +55,7 @@ type message interface {
 	Encode() string
 	Timestamp() int
 	Type() msgType
+	Ownership() (string, string, string)
 }
 
 // decode takes a slice of bytes that should constitute a single message and attempts to
@@ -165,6 +166,11 @@ func (m *msgBase) Timestamp() int {
 	return m.Time
 }
 
+// Ownership returns InstanceID, ClientID, GroupID for message
+func (m *msgBase) Ownership() (string, string, string) {
+	return m.InstanceID, m.ClientID, m.GroupID
+}
+
 // msgHeartbeat is sent regularly by all consumers to re-up their claim to the partition that
 // they're consuming.
 type msgHeartbeat struct {
@@ -187,6 +193,11 @@ func (m *msgHeartbeat) Timestamp() int {
 	return m.Time
 }
 
+// Ownership returns InstanceID, ClientID, GroupID for message
+func (m *msgHeartbeat) Ownership() (string, string, string) {
+	return m.InstanceID, m.ClientID, m.GroupID
+}
+
 // msgClaimingPartition is used in the claim flow.
 type msgClaimingPartition struct {
 	msgBase
@@ -205,6 +216,11 @@ func (m *msgClaimingPartition) Type() msgType {
 // Timestamp returns the timestamp of the message
 func (m *msgClaimingPartition) Timestamp() int {
 	return m.Time
+}
+
+// Ownership returns InstanceID, ClientID, GroupID for message
+func (m *msgClaimingPartition) Ownership() (string, string, string) {
+	return m.InstanceID, m.ClientID, m.GroupID
 }
 
 // msgReleasingPartition is used in a controlled shutdown to indicate that you are done with
@@ -229,6 +245,11 @@ func (m *msgReleasingPartition) Timestamp() int {
 	return m.Time
 }
 
+// Ownership returns InstanceID, ClientID, GroupID for message
+func (m *msgReleasingPartition) Ownership() (string, string, string) {
+	return m.InstanceID, m.ClientID, m.GroupID
+}
+
 // msgClaimingMessages is used for at-most-once consumption semantics, this is a pre-commit
 // advisory message.
 type msgClaimingMessages struct {
@@ -249,6 +270,11 @@ func (m *msgClaimingMessages) Type() msgType {
 // Timestamp returns the timestamp of the message
 func (m *msgClaimingMessages) Timestamp() int {
 	return m.Time
+}
+
+// Ownership returns InstanceID, ClientID, GroupID for message
+func (m *msgClaimingMessages) Ownership() (string, string, string) {
+	return m.InstanceID, m.ClientID, m.GroupID
 }
 
 // msgReleaseGroup is used by the Admin to pause a consumer group,
@@ -274,4 +300,9 @@ func (m *msgReleaseGroup) Type() msgType {
 // Timestamp returns the timestamp of the message
 func (m *msgReleaseGroup) Timestamp() int {
 	return m.Time
+}
+
+// Ownership returns InstanceID, ClientID, GroupID for message
+func (m *msgReleaseGroup) Ownership() (string, string, string) {
+	return m.InstanceID, m.ClientID, m.GroupID
 }

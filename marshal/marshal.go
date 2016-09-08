@@ -110,7 +110,7 @@ func (m *Marshaler) getClaimedPartitionState(topicName string, partID int) (
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
 
-	if !topic.partitions[partID].isClaimed(m.cluster.ts) {
+	if !topic.partitions[partID].claimed(m.cluster.ts) {
 		return nil, fmt.Errorf("Partition %s:%d is not claimed!", topicName, partID)
 	}
 
@@ -143,6 +143,7 @@ func (m *Marshaler) terminateAndCleanup(remove bool) {
 
 	m.lock.Lock()
 	defer m.lock.Unlock()
+
 	// Now terminate all of the consumers. In this codepath we do a no-release termination
 	// because that is usually correct in production. If someone actually wants to release
 	// they need to terminate the consumers manually.
@@ -174,10 +175,10 @@ func (m *Marshaler) Terminated() bool {
 	return atomic.LoadInt32(m.quit) == 1
 }
 
-// IsClaimed returns the current status on whether or not a partition is claimed by any other
+// Claimed returns the current status on whether or not a partition is claimed by any other
 // consumer in our group (including ourselves). A topic/partition that does not exist is
 // considered to be unclaimed.
-func (m *Marshaler) IsClaimed(topicName string, partID int) bool {
+func (m *Marshaler) Claimed(topicName string, partID int) bool {
 	// The contract of this method is that if it returns something and the heartbeat is
 	// non-zero, the partition is claimed.
 	claim := m.GetPartitionClaim(topicName, partID)
@@ -193,7 +194,7 @@ func (m *Marshaler) GetPartitionClaim(topicName string, partID int) PartitionCla
 	topic.lock.RLock()
 	defer topic.lock.RUnlock()
 
-	if topic.partitions[partID].isClaimed(m.cluster.ts) {
+	if topic.partitions[partID].claimed(m.cluster.ts) {
 		return topic.partitions[partID] // copy.
 	}
 	return PartitionClaim{}
@@ -269,7 +270,7 @@ func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
 	topic.lock.Lock()
 
 	// If the topic is already claimed, we can short circuit the decision process
-	if topic.partitions[partID].isClaimed(m.cluster.ts) {
+	if topic.partitions[partID].claimed(m.cluster.ts) {
 		defer topic.lock.Unlock()
 		if topic.partitions[partID].GroupID == m.groupID &&
 			topic.partitions[partID].ClientID == m.clientID {

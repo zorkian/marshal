@@ -166,6 +166,7 @@ func (c *KafkaCluster) updateClaim(msg *msgHeartbeat) {
 	// Note that a heartbeat will just set the claim structure. It's not valid to heartbeat
 	// for something you don't own (which is why we have ClaimPartition as a separate
 	// message), so we can only assume it's valid.
+	topic.partitions[msg.PartID].InstanceID = msg.InstanceID
 	topic.partitions[msg.PartID].ClientID = msg.ClientID
 	topic.partitions[msg.PartID].GroupID = msg.GroupID
 	topic.partitions[msg.PartID].CurrentOffset = msg.CurrentOffset
@@ -182,8 +183,7 @@ func (c *KafkaCluster) releaseClaim(msg *msgReleasingPartition) {
 
 	log.Infof("[%s:%d] Client %s releasing", msg.Topic, msg.PartID, msg.ClientID)
 	// The partition must be claimed by the person releasing it
-	if topic.partitions[msg.PartID].ClientID != msg.ClientID ||
-		topic.partitions[msg.PartID].GroupID != msg.GroupID {
+	if !topic.partitions[msg.PartID].checkOwnership(msg, true) {
 		log.Warningf("[%s] ReleasePartition message from client that doesn't own it. Dropping.",
 			c.name)
 		return
@@ -214,13 +214,14 @@ func (c *KafkaCluster) handleClaim(msg *msgClaimingPartition) {
 	}()
 
 	// If the partition is already claimed, there's nothing we need to do.
-	if topic.partitions[msg.PartID].isClaimed(c.ts) {
+	if topic.partitions[msg.PartID].claimed(c.ts) {
 		return
 	}
 
 	// At this point, the partition is unclaimed, which means we know we have the first
 	// ClaimPartition message. As soon as we get it, we fill in the structure which makes
 	// us think it's claimed (it is).
+	topic.partitions[msg.PartID].InstanceID = msg.InstanceID
 	topic.partitions[msg.PartID].ClientID = msg.ClientID
 	topic.partitions[msg.PartID].GroupID = msg.GroupID
 	topic.partitions[msg.PartID].CurrentOffset = 0 // not present in this message, reset.
