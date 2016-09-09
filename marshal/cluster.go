@@ -92,6 +92,7 @@ func NewMarshalOptions() MarshalOptions {
 func Dial(name string, brokers []string, options MarshalOptions) (*KafkaCluster, error) {
 	// Connect to Kafka
 	brokerConf := kafka.NewBrokerConf("PortalMarshal")
+	brokerConf.MetadataRefreshFrequency = time.Hour
 	brokerConf.ConnectionLimit = options.BrokerConnectionLimit
 	broker, err := kafka.Dial(brokers, brokerConf)
 	if err != nil {
