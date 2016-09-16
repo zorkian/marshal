@@ -9,6 +9,7 @@
 package marshal
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -327,10 +328,11 @@ func (a *consumerGroupAdmin) SetConsumerGroupPosition(groupID string,
 
 	select {
 	case <-claimFailures:
-		log.Errorf("Couldn't claim a partition -- admin failed to reset consumer group position! " +
+		err := errors.New("Couldn't claim a partition -- admin failed to reset consumer group position! " +
 			"Now releasing all existing claims without resetting offsets.")
 		close(stopHeartbeating)
-		return a.releaseClaims(false)
+		a.releaseClaims(false)
+		return err
 	case <-claimsDone:
 		close(stopHeartbeating)
 		// Release claims and reset offsets, if all claims have been successfully heartbeating.
