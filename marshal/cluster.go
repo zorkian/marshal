@@ -76,6 +76,13 @@ type MarshalOptions struct {
 	// extremely large number of partitions and are too slow.
 	// Default: 1 second.
 	MarshalRequestTimeout time.Duration
+
+	// MaxMessageSize is the maximum size in bytes of messages that can be returned. This
+	// must be set to the size of the largest messages your cluster is allowed to store,
+	// else you will end up with stalled streams. I.e., Kafka will never send you a message
+	// if the message is larger than this value but we can't detect that, we just think
+	// there is no data.
+	MaxMessageSize int32
 }
 
 // NewMarshalOptions returns a set of MarshalOptions populated with defaults.
@@ -84,6 +91,7 @@ func NewMarshalOptions() MarshalOptions {
 		BrokerConnectionLimit: 30,
 		ConsumeRequestTimeout: 3 * time.Second,
 		MarshalRequestTimeout: 1 * time.Second,
+		MaxMessageSize:        2000000,
 	}
 }
 

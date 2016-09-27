@@ -157,6 +157,7 @@ func (c *claim) setup() {
 	// Set up Kafka consumer
 	consumerConf := kafka.NewConsumerConf(c.topic, int32(c.partID))
 	consumerConf.StartOffset = c.offsets.Current
+	consumerConf.MaxFetchSize = c.marshal.cluster.options.MaxMessageSize
 	consumerConf.RequestTimeout = c.marshal.cluster.options.ConsumeRequestTimeout
 	// Do not retry. If we get back no data, we'll do our own retries.
 	consumerConf.RetryLimit = 0
