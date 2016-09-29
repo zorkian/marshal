@@ -385,9 +385,6 @@ func (c *claim) heartbeat() bool {
 		return false
 	}
 
-	// Let's update current offset internally to the last processed
-	c.updateOffsets()
-
 	// Lock held because we use c.offsets and update c.lastHeartbeat below
 	c.lock.Lock()
 	defer c.lock.Unlock()
@@ -532,6 +529,8 @@ func (c *claim) healthCheck() bool {
 func (c *claim) healthCheckLoop() {
 	time.Sleep(<-c.marshal.cluster.jitters)
 	for !c.Terminated() {
+		// Update current offsets internally to the last processed before checking if we are healthy
+		c.updateOffsets()
 		if c.healthCheck() {
 			go c.heartbeat()
 		}
