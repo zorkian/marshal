@@ -315,62 +315,72 @@ func (m *Marshaler) ClaimPartition(topicName string, partID int) bool {
 // Heartbeat will send an update for other people to know that we're still alive and
 // still owning this partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
-func (m *Marshaler) Heartbeat(topicName string, partID int, CurrentOffset int64) error {
+func (m *Marshaler) Heartbeat(topicName string, partID int, offset int64) error {
 	topic, err := m.getClaimedPartitionState(topicName, partID)
 	if err != nil {
 		return err
+	}
+
+	// Attempt to commit offset, this is best-effort and we don't care if it fails
+	// since the canonical storage is in the heartbeat
+	if err := m.CommitOffsets(topicName, partID, offset); err != nil {
+		log.Warningf("[%s:%d] failed to commit offset during heartbeat: %s",
+			topicName, partID, err)
 	}
 
 	// All good, let's heartbeat
 	cl := &msgHeartbeat{
 		msgBase:       *m.msgBase(topicName, partID),
-		CurrentOffset: CurrentOffset,
+		CurrentOffset: offset,
 	}
 	_, err = m.cluster.producer.Produce(MarshalTopic, int32(topic.claimPartition),
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
+		log.Errorf("[%s:%d] failed to send heartbeat message to Kafka: %s",
+			topicName, partID, err)
 		return fmt.Errorf("Failed to produce heartbeat to Kafka: %s", err)
 	}
 
-	err = m.CommitOffsets(topicName, partID, CurrentOffset)
-	return err
+	return nil
 }
 
 // ReleasePartition will send an update for other people to know that we're done with
 // a partition. Returns an error if anything has gone wrong (at which
 // point we can no longer assert we have the lock).
-func (m *Marshaler) ReleasePartition(topicName string, partID int, CurrentOffset int64) error {
+func (m *Marshaler) ReleasePartition(topicName string, partID int, offset int64) error {
 	topic, err := m.getClaimedPartitionState(topicName, partID)
 	if err != nil {
 		return err
 	}
 
+	// Commit our offset first; if this fails, we can still try to release,
+	// but we should advise
+	if err := m.CommitOffsets(topicName, partID, offset); err != nil {
+		log.Warningf("[%s:%d] failed to commit offset during release: %s",
+			topicName, partID, err)
+	}
+
 	// All good, let's release
 	cl := &msgReleasingPartition{
 		msgBase:       *m.msgBase(topicName, partID),
-		CurrentOffset: CurrentOffset,
+		CurrentOffset: offset,
 	}
 	_, err = m.cluster.producer.Produce(MarshalTopic, int32(topic.claimPartition),
 		&proto.Message{Value: []byte(cl.Encode())})
 	if err != nil {
+		log.Errorf("[%s:%d] failed to send release message to Kafka: %s",
+			topicName, partID, err)
 		return fmt.Errorf("Failed to produce release to Kafka: %s", err)
 	}
 
-	err = m.CommitOffsets(topicName, partID, CurrentOffset)
-	return err
+	return nil
 }
 
 // CommitOffsets will commit the partition offsets to Kafka so it's available in the
 // long-term storage of the offset coordination system. Note: this method does not ensure
 // that this Marshal instance owns the topic/partition in question.
-func (m *Marshaler) CommitOffsets(topicName string, partID int, CurrentOffset int64) error {
-	err := m.offsets.Commit(topicName, int32(partID), CurrentOffset)
-	if err != nil {
-		// Do not count this as a returned error as that will cause us to drop consumption, but
-		// do log it so people can see it
-		log.Errorf("[%s:%d] failed to commit offsets: %s", topicName, partID, err)
-	}
-	return nil
+func (m *Marshaler) CommitOffsets(topicName string, partID int, offset int64) error {
+	return m.offsets.Commit(topicName, int32(partID), offset)
 }
 
 // ClientID returns the client ID we're using
