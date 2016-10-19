@@ -76,6 +76,7 @@ type claim struct {
 // after a short period.
 func newClaim(topic string, partID int, marshal *Marshaler, consumer *Consumer,
 	messages chan *Message, options ConsumerOptions) *claim {
+
 	// Get all available offset information
 	offsets, err := marshal.GetPartitionOffsets(topic, partID)
 	if err != nil {
@@ -85,20 +86,19 @@ func newClaim(topic string, partID int, marshal *Marshaler, consumer *Consumer,
 	log.Debugf("[%s:%d] consumer offsets: early = %d, cur/comm = %d/%d, late = %d",
 		topic, partID, offsets.Earliest, offsets.Current, offsets.Committed, offsets.Latest)
 
-	// Take the greatest of the committed/current offset, this means we will recover from
-	// a situation where the last time this partition was claimed has fallen out of our
-	// coordination memory.
-	if offsets.Committed > 0 && offsets.Committed > offsets.Current {
-		if offsets.Current > 0 {
-			// This state shouldn't really happen. This implies that someone went back in time
-			// and started consuming earlier than the committed offset.
-			log.Warningf("[%s:%d] committed offset is %d but heartbeat offset was %d",
-				topic, partID, offsets.Committed, offsets.Current)
-		} else {
-			log.Infof("[%s:%d] recovering committed offset of %d",
-				topic, partID, offsets.Committed)
-		}
+	// For offsets, we strictly prefer the contents of the MarshalTopic and will use that
+	// if present. If we don't have that data, then we'll fall back to the Kafka committed
+	// offsets. Failing that we'll start at the beginning of the partition.
+	if offsets.Current > 0 {
+		// Ideal case, we just use the Marshal offset that is already set
+	} else if offsets.Committed > 0 {
+		log.Infof("[%s:%d] no Marshal offset found, using committed offset %d",
+			topic, partID, offsets.Committed)
 		offsets.Current = offsets.Committed
+	} else {
+		log.Infof("[%s:%d] no Marshal or committed offset found, using earliest offset %d",
+			topic, partID, offsets.Earliest)
+		offsets.Current = offsets.Earliest
 	}
 
 	// Construct object and set it up
@@ -297,7 +297,9 @@ func (c *claim) teardown(releasePartition bool) bool {
 		log.Infof("[%s:%d] releasing partition claim", c.topic, c.partID)
 		err = c.marshal.ReleasePartition(c.topic, c.partID, c.offsets.Current)
 	} else {
-		err = c.marshal.CommitOffsets(c.topic, c.partID, c.offsets.Current)
+		// We're not releasing but we do want to update our offsets to the latest value
+		// we know about, so issue a gratuitous heartbeat
+		err = c.marshal.Heartbeat(c.topic, c.partID, c.offsets.Current)
 	}
 
 	if err != nil {
