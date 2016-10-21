@@ -155,35 +155,59 @@ func (a *consumerGroupAdmin) releaseClaims(resetOffset bool) error {
 	}
 }
 
-// heartbeatLoop hearbeats as if we had a claim to this partition and were simply
-// not reading past where the previous owner had left off.
-func (a *consumerGroupAdmin) heartbeatLoop(
-	topic string, partID int, lastOffset int64, stopChan chan struct{}) {
+// Send a single heartbeat using the given offset.  The return value indicates whether the
+// heartbeat was successfully sent.
+func (a *consumerGroupAdmin) heartbeat(topic string, partID int, offset int64) bool {
 
+	// If we fail to heartbeat, record this in claimHealth.
+	// The Admin will take care of cleaning up other claims.
+	if err := a.marshaler.Heartbeat(topic, partID, offset); err != nil {
+		log.Errorf("[%s:%d] Admin failed to heartbeat. It is now unhealthy "+
+			"and will not reset offsets.", topic, partID)
+		atomic.StoreInt32(a.claimHealth, 0)
+		return false
+	}
+	return true
+}
+
+// heartbeatLoop heartbeats as if we had a claim to this partition and were simply not reading past
+// where the previous owner had left off.
+//
+// Callers can signal for the heartbeatLoop to stop by closing the stopHeartbeats channel;
+// heartbeatsWg is used to indicate when heartbeating has in fact stopped.
+func (a *consumerGroupAdmin) heartbeatLoop(
+	topic string, partID int, lastOffset int64,
+	stopHeartbeats chan struct{}, heartbeatsWg *sync.WaitGroup) {
+
+	defer heartbeatsWg.Done()
+
+	// We send the first heartbeat right away (instead of waiting an entire heartbeat interval).
+	if !a.heartbeat(topic, partID, lastOffset) {
+		return
+	}
 	for {
 		select {
+
 		// Stop claimHealth either when all topic, partitions have been successfully claimed,
 		// or the Admin has failed to do so and needs to abort.
-		case <-stopChan:
+		case <-stopHeartbeats:
 			return
-		default:
-			// If we fail to heartbeat, record this in claimHealth.
-			// The Admin will take care of cleaning up other claims.
-			if err := a.marshaler.Heartbeat(topic, partID, lastOffset); err != nil {
-				log.Errorf("[%s:%d] Admin failed to heartbeat. It is now unhealthy "+
-					"and will not reset offsets.", topic, partID)
-				atomic.StoreInt32(a.claimHealth, 0)
+
+		// Note that waiting for the heartbeat interval in a select statement (instead of
+		// using time.Sleep) allows the heartbeat to stop right away.
+		case <-time.After(<-a.marshaler.cluster.jitters):
+			if !a.heartbeat(topic, partID, lastOffset) {
 				return
 			}
-			time.Sleep(<-a.marshaler.cluster.jitters)
 		}
 	}
 }
 
 // claimAndHeartbeat attempts to claim a partition released by a paused consumer.
 // It heartbeats the previous offset.
-func (a *consumerGroupAdmin) claimAndHeartbeat(topic string,
-	partID int, newOffset int64, stopHeartbeat chan struct{}) bool {
+func (a *consumerGroupAdmin) claimAndHeartbeat(
+	topic string, partID int, newOffset int64,
+	stopHeartbeats chan struct{}, heartbeatsWg *sync.WaitGroup) bool {
 
 	// Get current offsets, which we will try to keep claimHealth.
 	partitionClaim := a.marshaler.GetLastPartitionClaim(topic, partID)
@@ -192,12 +216,15 @@ func (a *consumerGroupAdmin) claimAndHeartbeat(topic string,
 	if !a.marshaler.ClaimPartition(topic, partID) {
 		log.Errorf("[%s:%d] Admin couldn't claim partition to set Kafka offset",
 			topic, partID)
+		// It's necessary to call heartbeatsWg.Done() directly because the heartbeatLoop goroutine
+		// will not be launched in this case.
+		heartbeatsWg.Done()
 		return false
 	}
 
 	// Continuously heartbeat the last offsets.
 	a.addClaimAttempt(topic, partID, partitionClaim.CurrentOffset, newOffset)
-	go a.heartbeatLoop(topic, partID, partitionClaim.CurrentOffset, stopHeartbeat)
+	go a.heartbeatLoop(topic, partID, partitionClaim.CurrentOffset, stopHeartbeats, heartbeatsWg)
 	return true
 }
 
@@ -303,14 +330,22 @@ func (a *consumerGroupAdmin) SetConsumerGroupPosition(groupID string,
 	defer close(claimFailures)
 
 	var claimsWg sync.WaitGroup
-	// stopHeartbeating channel instructs all successfully claimed and heartbeating claims to stop.
-	stopHeartbeating := make(chan struct{})
+
+	// Closing stopHeartbeats instructs all successfully claimed and heartbeating claims to stop.
+	// Waiting on heartbeatsWg will ensure that all heartbeating has in fact stopped.  Note that
+	// it's important to define heartbeatsWg as a reference so that method calls with heartbeatsWg
+	// as a parameter actually use the same WaitGroup (instead of calling Done on a copy, which
+	// will make the below calls to Wait block forever).
+	stopHeartbeats := make(chan struct{})
+	heartbeatsWg := &sync.WaitGroup{}
 	for topicName, partitionOffsets := range offsets {
 		for partID, offset := range partitionOffsets {
 			claimsWg.Add(1)
+			heartbeatsWg.Add(1)
 
 			go func(topicName string, partID int, offset int64) {
-				if ok := a.claimAndHeartbeat(topicName, partID, offset, stopHeartbeating); !ok {
+				ok := a.claimAndHeartbeat(topicName, partID, offset, stopHeartbeats, heartbeatsWg)
+				if !ok {
 					claimFailures <- true
 				}
 				claimsWg.Done()
@@ -329,11 +364,18 @@ func (a *consumerGroupAdmin) SetConsumerGroupPosition(groupID string,
 	case <-claimFailures:
 		err := errors.New("Couldn't claim a partition -- admin failed to reset consumer group position! " +
 			"Now releasing all existing claims without resetting offsets.")
-		close(stopHeartbeating)
+		close(stopHeartbeats)
+		heartbeatsWg.Wait()
 		a.releaseClaims(false)
 		return err
 	case <-claimsDone:
-		close(stopHeartbeating)
+		close(stopHeartbeats)
+
+		// It's critical that we don't perform an offset-resetting release operation until
+		// after heartbeating has stopped.  Otherwise, a subsequent heartbeat could undo
+		// the offset reset (the heartbeats use the previous offsets).
+		heartbeatsWg.Wait()
+
 		// Release claims and reset offsets, if all claims have been successfully heartbeating.
 		// If not, we'll release claims and not reset offsets.
 		return a.releaseClaims(a.claimsHealthy())
