@@ -73,6 +73,7 @@ func (c *KafkaCluster) consumeFromKafka(partID int, out chan message, startOldes
 	consumerConf.RetryErrLimit = 1 // Do not retry
 	consumerConf.StartOffset = kafka.StartOffsetOldest
 	consumerConf.RequestTimeout = c.options.MarshalRequestTimeout
+	consumerConf.RetryWait = c.options.MarshalRequestRetryWait
 
 	// Get the offsets of this partition, we're going to arbitrarily pick something that
 	// is ~100,000 from the end if there's more than that. This is only if startOldest is

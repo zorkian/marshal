@@ -68,14 +68,23 @@ type MarshalOptions struct {
 	// ConsumeRequestTimeout sets the time that we ask Kafka to wait before returning any
 	// data to us. Setting this high uses more connections and can lead to some latency
 	// but keeps the load on Kafka minimal. Use this to balance QPS against latency.
-	// Default: 3 seconds.
+	//
+	// Default: 100 milliseconds.
 	ConsumeRequestTimeout time.Duration
 
 	// MarshalRequestTimeout is used for our coordination requests. This should be reasonable
 	// at default, but is left as a tunable in case you have clients that are claiming an
-	// extremely large number of partitions and are too slow.
-	// Default: 1 second.
+	// extremely large number of partitions and are too slow. The overall Marshal latency
+	// is impacted by this value as well as the MarshalRequestRetryWait below.
+	//
+	// Default: 1 millisecond.
 	MarshalRequestTimeout time.Duration
+
+	// MarshalRequestRetryWait is the time between consume requests Marshal generates. This
+	// should be set to balance the above timeouts to prevent hammering the server.
+	//
+	// Default: 500 milliseconds.
+	MarshalRequestRetryWait time.Duration
 
 	// MaxMessageSize is the maximum size in bytes of messages that can be returned. This
 	// must be set to the size of the largest messages your cluster is allowed to store,
@@ -88,10 +97,11 @@ type MarshalOptions struct {
 // NewMarshalOptions returns a set of MarshalOptions populated with defaults.
 func NewMarshalOptions() MarshalOptions {
 	return MarshalOptions{
-		BrokerConnectionLimit: 30,
-		ConsumeRequestTimeout: 3 * time.Second,
-		MarshalRequestTimeout: 1 * time.Second,
-		MaxMessageSize:        2000000,
+		BrokerConnectionLimit:   30,
+		ConsumeRequestTimeout:   100 * time.Millisecond,
+		MarshalRequestTimeout:   1 * time.Millisecond,
+		MarshalRequestRetryWait: 500 * time.Millisecond,
+		MaxMessageSize:          2000000,
 	}
 }
 
