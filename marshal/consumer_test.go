@@ -39,6 +39,8 @@ func NewTestConsumer(m *Marshaler, topics []string) *Consumer {
 		messages:           make(chan *Message, 1000),
 		topicClaimsChan:    make(chan map[string]bool, 1),
 		topicClaimsUpdated: make(chan struct{}, 1),
+		stopChan:           make(chan struct{}),
+		doneChan:           make(chan struct{}),
 	}
 
 	for _, topic := range topics {
