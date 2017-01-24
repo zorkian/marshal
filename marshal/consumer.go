@@ -105,6 +105,8 @@ type Consumer struct {
 	rand       *rand.Rand
 	partitions map[string]int
 	claims     map[string]map[int]*claim
+	stopChan   chan struct{}
+	doneChan   chan struct{}
 }
 
 // NewConsumer instantiates a consumer object for a given topic. You must create a
@@ -140,6 +142,8 @@ func (m *Marshaler) NewConsumer(topicNames []string, options ConsumerOptions) (*
 		claims:             make(map[string]map[int]*claim),
 		topicClaimsChan:    make(chan map[string]bool),
 		topicClaimsUpdated: make(chan struct{}, 1),
+		stopChan:           make(chan struct{}),
+		doneChan:           make(chan struct{}),
 	}
 	atomic.StoreInt32(c.alive, 1)
 	m.addNewConsumer(c)
@@ -562,10 +566,6 @@ func (c *Consumer) claimTopics() {
 // sendTopicClaimUpdate can be called by various codepaths that have learned that there is
 // an update to send down to the users.
 func (c *Consumer) sendTopicClaimsUpdate() {
-	if c.Terminated() {
-		return
-	}
-
 	select {
 	case c.topicClaimsUpdated <- struct{}{}:
 		// Just sends a marker on the channel.
@@ -580,7 +580,17 @@ func (c *Consumer) sendTopicClaimsLoop() {
 	defer close(c.topicClaimsChan)
 
 	lastClaims := make(map[string]bool)
-	for range c.topicClaimsUpdated {
+	keepRunning := true
+
+	for keepRunning {
+		select {
+		case <-c.topicClaimsUpdated:
+			// Continue on and send an update
+		case <-c.stopChan:
+			// Send one more and exit
+			keepRunning = false
+		}
+
 		// Get consistent claims and send them
 		claims, err := c.GetCurrentTopicClaims()
 		if err != nil {
@@ -621,12 +631,6 @@ func (c *Consumer) sendTopicClaimsLoop() {
 
 		// This should never block since we're the only writer
 		c.topicClaimsChan <- claims
-
-		// This is at the end of the loop because we want to send one final update
-		// as we're exiting (which we've already done above)
-		if c.Terminated() {
-			return
-		}
 	}
 }
 
@@ -682,6 +686,12 @@ func (c *Consumer) terminateAndCleanup(release bool, remove bool) bool {
 		return false
 	}
 
+	// Purposefully done outside of the lock below so we can send the message
+	// that stopping is happening ASAP, and doneChan is deferred so it will close
+	// at some point in the future
+	close(c.stopChan)
+	defer close(c.doneChan)
+
 	latestTopicClaims := make(map[string]bool)
 	releasedTopics := make(map[string]bool)
 
@@ -719,7 +729,6 @@ func (c *Consumer) terminateAndCleanup(release bool, remove bool) bool {
 
 	// Update the claims one last time
 	c.sendTopicClaimsUpdate()
-	close(c.topicClaimsUpdated)
 	return true
 }
 
