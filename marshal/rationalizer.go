@@ -231,13 +231,6 @@ func (c *KafkaCluster) handleClaim(msg *msgClaimingPartition) {
 	topic.partitions[msg.PartID].LastRelease = 0
 }
 
-// releaseGroup instructs marshallers controlling consumers with a specific groupID to
-// pause that consumer group.
-func (c *KafkaCluster) releaseGroup(msg *msgReleaseGroup) {
-	expiry := time.Unix(int64(msg.MsgExpireTime), 0)
-	c.pauseConsumerGroup(msg.GroupID, msg.ClientID, expiry)
-}
-
 // rationalize is a goroutine that constantly consumes from a given partition of the marshal
 // topic and makes changes to the world state whenever something happens.
 func (c *KafkaCluster) rationalize(partID int, in <-chan message) { // Might be in over my head.
@@ -257,8 +250,6 @@ func (c *KafkaCluster) rationalize(partID int, in <-chan message) { // Might be 
 			c.releaseClaim(msg.(*msgReleasingPartition))
 		case msgTypeClaimingMessages:
 			// TODO: Implement.
-		case msgTypeReleaseGroup:
-			c.releaseGroup(msg.(*msgReleaseGroup))
 		}
 
 		// Update step counter so the test suite can wait for messages to be
