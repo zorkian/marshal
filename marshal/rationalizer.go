@@ -226,7 +226,6 @@ func (c *KafkaCluster) handleClaim(msg *msgClaimingPartition) {
 	topic.partitions[msg.PartID].InstanceID = msg.InstanceID
 	topic.partitions[msg.PartID].ClientID = msg.ClientID
 	topic.partitions[msg.PartID].GroupID = msg.GroupID
-	topic.partitions[msg.PartID].CurrentOffset = 0 // not present in this message, reset.
 	topic.partitions[msg.PartID].LastHeartbeat = int64(msg.Time)
 	topic.partitions[msg.PartID].LastRelease = 0
 }
