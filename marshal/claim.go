@@ -431,9 +431,9 @@ func (c *claim) updateCurrentOffsets() (bool, int64) {
 		// Remember current is always "last committed + 1", see the docs on
 		// PartitionOffset for a reminder.
 		didAdvance = true
-		if c.offsets.Current <= offset + 1 {
+		if c.offsets.Current <= offset+1 {
 			log.Errorf("[%s:%d] rewinding current offset from %d to %d",
-				c.topic, c.partID, c.offsets.Current, offset + 1)
+				c.topic, c.partID, c.offsets.Current, offset+1)
 		}
 		c.offsets.Current = offset + 1
 		delete(c.tracking, offset)
