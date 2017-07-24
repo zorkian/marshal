@@ -346,6 +346,10 @@ func (c *claim) messagePump() {
 		c.lastMessageTime = time.Now()
 		c.tracking[msg.Offset] = false
 		c.outstandingMessages++
+		if msg.Offset <= c.offsets.Current {
+			log.Errorf("[%s:%d] just consumed offset %d earlier than current %d",
+				c.topic, c.partID, msg.Offset, c.offsets.Current)
+		}
 		c.lock.Unlock()
 
 		// Push the message down to the client (this bypasses the Consumer)
@@ -427,6 +431,10 @@ func (c *claim) updateCurrentOffsets() (bool, int64) {
 		// Remember current is always "last committed + 1", see the docs on
 		// PartitionOffset for a reminder.
 		didAdvance = true
+		if c.offsets.Current <= offset+1 {
+			log.Errorf("[%s:%d] rewinding current offset from %d to %d",
+				c.topic, c.partID, c.offsets.Current, offset+1)
+		}
 		c.offsets.Current = offset + 1
 		delete(c.tracking, offset)
 	}
