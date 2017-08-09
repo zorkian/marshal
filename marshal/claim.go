@@ -498,7 +498,7 @@ func (c *claim) healthCheck() bool {
 	// we've gotten into a bad state. Make a check to see how far behind we are, if we
 	// are behind and not seeing any messages then release.
 	if time.Now().After(c.lastMessageTime.Add(HeartbeatInterval * time.Second)) {
-		if consumerVelocity == 0 && (partitionVelocity > 0 || c.offsets.Latest > c.offsets.Current) {
+		if c.options.ReleaseClaimsIfBehind && consumerVelocity == 0 && (partitionVelocity > 0 || c.offsets.Latest > c.offsets.Current) {
 			// If that's true then it means velocity has been 0 for at least long enough
 			// to drive the average to 0, which means about 10 heartbeat cycles. This is
 			// long enough that releasing seems fine.
