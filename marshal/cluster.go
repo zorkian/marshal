@@ -120,10 +120,10 @@ func NewMarshalOptions() MarshalOptions {
 func Dial(name string, brokers []string, options MarshalOptions) (*KafkaCluster, error) {
 	// Connect to Kafka
 	brokerConf := kafka.NewBrokerConf("PortalMarshal")
-	brokerConf.MetadataRefreshFrequency = time.Hour
-	brokerConf.ConnectionLimit = options.BrokerConnectionLimit
+	brokerConf.ClusterConnectionConf.MetadataRefreshFrequency = time.Hour
+	brokerConf.ClusterConnectionConf.ConnectionLimit = options.BrokerConnectionLimit
 	brokerConf.LeaderRetryLimit = 1 // Do not retry
-	broker, err := kafka.Dial(brokers, brokerConf)
+	broker, err := kafka.NewBroker(name, brokers, brokerConf)
 	if err != nil {
 		return nil, err
 	}
@@ -394,13 +394,30 @@ func (c *KafkaCluster) removeMarshal(m *Marshaler) {
 
 // waitForRsteps is used by the test suite to ask the rationalizer to wait until some number
 // of events have been processed. This also returns the current rsteps when it returns.
-func (c *KafkaCluster) waitForRsteps(steps int) int {
-	for {
-		cval := atomic.LoadInt32(c.rsteps)
-		if cval >= int32(steps) {
-			return int(cval)
+func (c *KafkaCluster) waitForRsteps(steps int) (int, error) {
+	cancel := make(chan struct{})
+	result := make(chan int)
+	go func() {
+		for {
+			select {
+			case <-cancel:
+				break
+			default:
+				cval := atomic.LoadInt32(c.rsteps)
+				if cval >= int32(steps) {
+					result <- int(cval)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
 		}
-		time.Sleep(5 * time.Millisecond)
+	}()
+
+	select {
+	case res := <-result:
+		return res, nil
+	case <-time.After(3 * time.Second):
+		close(cancel)
+		return 0, errors.New("Timed out waiting for steps")
 	}
 }
 
@@ -453,9 +470,6 @@ func (c *KafkaCluster) Terminate() {
 	for _, marshaler := range marshalers {
 		marshaler.terminateAndCleanup(false)
 	}
-
-	// Close the broker asynchronously to prevent blocking on potential network I/O
-	go c.broker.Close()
 }
 
 // Terminated returns whether or not we have been terminated.
