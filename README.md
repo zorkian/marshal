@@ -1,7 +1,7 @@
 # Marshal - a Kafka consumer coordination library
 
-[![GoDoc](http://img.shields.io/badge/godoc-reference-blue.svg)](http://godoc.org/github.com/dropbox/marshal/marshal)
-[![Build Status](https://travis-ci.org/dropbox/marshal.svg)](https://travis-ci.org/dropbox/marshal)
+[![GoDoc](http://img.shields.io/badge/godoc-reference-blue.svg)](http://godoc.org/github.com/zorkian/marshal/marshal)
+[![Build Status](https://travis-ci.org/zorkian/marshal.svg)](https://travis-ci.org/dropbox/marshal)
 
 Marshal is **in beta**. We have deployed it in a few places and are
 working to ensure it's stable and fast. It is not 100% battle tested
@@ -54,7 +54,7 @@ example directory):
 package main
 
 import "fmt"
-import "github.com/dropbox/marshal/marshal"
+import "github.com/zorkian/marshal/marshal"
 
 func main() {
     marshaler, _ := marshal.NewMarshaler(
@@ -93,7 +93,7 @@ failure scenarios might be interesting.
 
 If you want the gory details about the protocol
 used internally, please see the [PROTOCOL
-documentation](https://github.com/dropbox/marshal/blob/master/PROTOCOL.md).
+documentation](https://github.com/zorkian/marshal/blob/master/PROTOCOL.md).
 You don't need to read and understand it, though, but it might be
 useful.
 
@@ -272,6 +272,6 @@ generated Client IDs every time your program starts.
 There may be bugs. This is a new project. There are tests, however, and
 we very much welcome the submission of bug reports, pull requests, etc.
 
-Github: https://github.com/dropbox/marshal
+Github: https://github.com/zorkian/marshal
 
 IRC: #kafka-marshal on Freenode

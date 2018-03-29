@@ -3,8 +3,8 @@ package marshal
 import (
 	"sync"
 
-	"github.com/dropbox/kafka"
-	"github.com/dropbox/kafka/kafkatest"
+	"github.com/zorkian/kafka"
+	"github.com/zorkian/kafka/kafkatest"
 	"github.com/op/go-logging"
 
 	. "gopkg.in/check.v1"

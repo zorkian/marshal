@@ -3,7 +3,7 @@ package marshal
 import (
 	. "gopkg.in/check.v1"
 
-	"github.com/dropbox/kafka/kafkatest"
+	"github.com/zorkian/kafka/kafkatest"
 )
 
 var _ = Suite(&ClusterSuite{})

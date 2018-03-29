@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dropbox/kafka/proto"
+	"github.com/zorkian/kafka/proto"
 )
 
 // CommitToken is a minimal structure that contains only the information necessary to

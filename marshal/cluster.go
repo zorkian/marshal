@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dropbox/kafka"
+	"github.com/zorkian/kafka"
 )
 
 // KafkaCluster is a user-agnostic view of the world. It connects to a Kafka cluster

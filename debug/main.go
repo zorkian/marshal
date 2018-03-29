@@ -12,7 +12,7 @@ import (
 	"flag"
 	"time"
 
-	"github.com/dropbox/marshal/marshal"
+	"github.com/zorkian/marshal/marshal"
 	"github.com/op/go-logging"
 )
 

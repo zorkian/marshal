@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dropbox/kafka"
+	"github.com/zorkian/kafka"
 	"github.com/jpillora/backoff"
 )
 
